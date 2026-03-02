@@ -5,7 +5,7 @@
  * Design: https://github.com/zylos-ai/zylos-core/issues/202
  */
 
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,10 +88,13 @@ async function checkNetwork() {
 
   // Reachability check — try a lightweight HTTPS request
   try {
-    const curlCmd = proxy
-      ? `curl -s --proxy "${proxy}" --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`
-      : `curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`;
-    const code = execSync(curlCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const curlArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
+      '-o', '/dev/null', '-w', '%{http_code}'];
+    if (proxy) curlArgs.push('--proxy', proxy);
+    curlArgs.push(`https://${API_HOST}/`);
+    const code = execFileSync('curl', curlArgs, {
+      encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
     // Any HTTP response (even 4xx) means network works
     results.reachable = true;
     results.details.httpCode = code;
@@ -99,8 +102,11 @@ async function checkNetwork() {
     // If curl itself fails, check if proxy is the issue
     if (proxy) {
       try {
-        const directCmd = `curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`;
-        execSync(directCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        const directArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
+          '-o', '/dev/null', '-w', '%{http_code}', `https://${API_HOST}/`];
+        execFileSync('curl', directArgs, {
+          encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
+        });
         results.details.proxyIssue = true;
       } catch {
         results.details.proxyIssue = false;
@@ -515,9 +521,12 @@ export async function doctorCommand(args) {
 
   // ── Handle issues ────────────────────────────────────────────
 
+  let failed = [];
+  let manual = [];
+
   if (issues.length > 0) {
     const fixable = issues.filter(i => i.fix);
-    const manual = issues.filter(i => !i.fix);
+    manual = issues.filter(i => !i.fix);
 
     console.log(separator('Issues'));
 
@@ -564,7 +573,6 @@ export async function doctorCommand(args) {
 
     // Apply fixes
     const fixed = [];
-    const failed = [];
 
     for (let i = 0; i < fixable.length; i++) {
       const issue = fixable[i];
@@ -711,21 +719,17 @@ export async function doctorCommand(args) {
 
   // ── Final status ─────────────────────────────────────────────
 
-  const hasUnresolved = issues.some(i => !i.fix) || issues.length > 0;
   if (issues.length === 0) {
     console.log(`\n${green('✓ Everything is working.')}\n`);
     logToFile('result: all checks passed');
     process.exit(0);
+  } else if (!checkOnly && failed.length === 0 && manual.length === 0) {
+    console.log(`\n${green('✓ All issues fixed.')}\n`);
+    logToFile('result: all issues fixed');
+    process.exit(0);
   } else {
-    const allFixed = issues.every(i => i.fix);
-    if (allFixed && !checkOnly) {
-      console.log(`\n${green('✓ All issues fixed.')}\n`);
-      logToFile('result: all issues fixed');
-      process.exit(0);
-    } else {
-      console.log('');
-      logToFile('result: issues remain');
-      process.exit(1);
-    }
+    console.log('');
+    logToFile('result: issues remain');
+    process.exit(1);
   }
 }
