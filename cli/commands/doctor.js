@@ -1,0 +1,731 @@
+/**
+ * zylos doctor — diagnose installation health, repair startup chain,
+ * and guide the user to connect with their Claude agent.
+ *
+ * Design: https://github.com/zylos-ai/zylos-core/issues/202
+ */
+
+import { execSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import dns from 'node:dns/promises';
+import { ZYLOS_DIR, COMPONENTS_FILE, ENV_FILE } from '../lib/config.js';
+import { readEnvFile } from '../lib/env.js';
+import { loadComponents } from '../lib/components.js';
+import { fetchLatestTag } from '../lib/github.js';
+import { getCurrentVersion } from '../lib/self-upgrade.js';
+import { commandExists } from '../lib/shell-utils.js';
+import { promptYesNo } from '../lib/prompts.js';
+import { bold, dim, green, red, yellow, cyan, heading } from '../lib/colors.js';
+
+const SESSION = 'claude-main';
+const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
+const API_HOST = 'api.anthropic.com';
+
+// ── Logging ──────────────────────────────────────────────────────
+
+function logToFile(message) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    fs.appendFileSync(LOG_FILE, `[${ts}] ${message}\n`);
+  } catch {}
+}
+
+// ── Display helpers ──────────────────────────────────────────────
+
+const PASS = (label) => `  ${green('✓')} ${label}`;
+const FAIL = (label) => `  ${red('✗')} ${label}`;
+const SKIP = (label) => `  ${dim('⊘')} ${label}`;
+const SUB = (label) => `  ${dim('├')} ${label}`;
+const SUB_LAST = (label) => `  ${dim('└')} ${label}`;
+const BULLET_ON = (label) => `  ${green('●')} ${label}`;
+const BULLET_OFF = (label) => `  ${dim('○')} ${label}`;
+
+function groupHeader(name, status) {
+  const icon = status === 'pass' ? green('✓')
+    : status === 'fail' ? red('✗')
+    : status === 'skip' ? dim('⊘')
+    : dim('…');
+  return `\n${icon} ${bold(name)}`;
+}
+
+function separator(title) {
+  const line = '─'.repeat(40);
+  return `\n${dim(line)}\n  ${bold(title)}\n${dim(line)}`;
+}
+
+// ── Check implementations ────────────────────────────────────────
+
+function checkTmuxInstalled() {
+  return commandExists('tmux');
+}
+
+function checkPm2Installed() {
+  return commandExists('pm2');
+}
+
+async function checkNetwork() {
+  const results = { dns: false, proxy: null, reachable: false, details: {} };
+  const env = readEnvFile();
+  const proxy = env.get('HTTPS_PROXY') || env.get('https_proxy') || process.env.HTTPS_PROXY || '';
+
+  if (proxy) {
+    results.proxy = proxy;
+  }
+
+  // DNS check
+  try {
+    const addrs = await dns.resolve4(API_HOST);
+    results.dns = true;
+    results.details.resolved = addrs[0];
+  } catch (err) {
+    results.details.dnsError = err.code || err.message;
+    return results;
+  }
+
+  // Reachability check — try a lightweight HTTPS request
+  try {
+    const curlCmd = proxy
+      ? `curl -s --proxy "${proxy}" --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`
+      : `curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`;
+    const code = execSync(curlCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    // Any HTTP response (even 4xx) means network works
+    results.reachable = true;
+    results.details.httpCode = code;
+  } catch (err) {
+    // If curl itself fails, check if proxy is the issue
+    if (proxy) {
+      try {
+        const directCmd = `curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://${API_HOST}/`;
+        execSync(directCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        results.details.proxyIssue = true;
+      } catch {
+        results.details.proxyIssue = false;
+      }
+    }
+  }
+
+  return results;
+}
+
+function checkClaudeCli() {
+  if (!commandExists('claude')) return { installed: false };
+  let version = 'unknown';
+  try {
+    version = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
+  } catch {}
+  return { installed: true, version };
+}
+
+function checkClaudeAuth() {
+  try {
+    const result = spawnSync('claude', ['auth', 'status'], {
+      stdio: 'pipe', encoding: 'utf8', timeout: 15000,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function checkAutonomousMode() {
+  try {
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    return !!settings.skipDangerousModePermissionPrompt;
+  } catch {
+    return false;
+  }
+}
+
+function checkPm2Services() {
+  try {
+    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const procs = JSON.parse(output);
+    const activityMon = procs.find(p => p.name === 'activity-monitor');
+    return {
+      running: true,
+      total: procs.length,
+      online: procs.filter(p => p.pm2_env?.status === 'online').length,
+      activityMonitor: activityMon?.pm2_env?.status === 'online',
+      procs,
+    };
+  } catch {
+    return { running: false, total: 0, online: 0, activityMonitor: false, procs: [] };
+  }
+}
+
+function checkTmuxSession() {
+  try {
+    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Fix implementations ──────────────────────────────────────────
+
+function fixTmux() {
+  try {
+    execSync('sudo apt-get install -y tmux 2>/dev/null', { stdio: 'inherit' });
+    return commandExists('tmux');
+  } catch {
+    return false;
+  }
+}
+
+function fixPm2() {
+  try {
+    execSync('npm install -g pm2 2>/dev/null', { stdio: 'inherit' });
+    return commandExists('pm2');
+  } catch {
+    return false;
+  }
+}
+
+function fixClaudeCli() {
+  try {
+    execSync('curl -fsSL https://claude.ai/install.sh | sh', { stdio: 'inherit' });
+    return commandExists('claude');
+  } catch {
+    return false;
+  }
+}
+
+function fixClaudeAuth() {
+  try {
+    spawnSync('claude', ['login'], { stdio: 'inherit' });
+    return checkClaudeAuth();
+  } catch {
+    return false;
+  }
+}
+
+function fixAutonomousMode() {
+  try {
+    const claudeDir = path.join(os.homedir(), '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    settings.skipDangerousModePermissionPrompt = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fixServices() {
+  try {
+    const ecosystemFile = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+    if (fs.existsSync(ecosystemFile)) {
+      execSync(`pm2 start "${ecosystemFile}" 2>/dev/null`, { stdio: 'pipe' });
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    } else {
+      // Fallback to zylos start
+      execSync('zylos start 2>/dev/null', { stdio: 'pipe' });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Channel discovery ────────────────────────────────────────────
+
+function discoverChannels(pm2Procs) {
+  const channels = [];
+
+  // tmux is always a channel if session exists
+  channels.push({
+    name: 'tmux',
+    action: 'zylos attach',
+    type: 'terminal',
+    online: checkTmuxSession(),
+  });
+
+  // Web console — built-in, check PM2
+  const webConsole = pm2Procs.find(p => p.name === 'web-console');
+  const caddy = pm2Procs.find(p => p.name === 'caddy');
+  if (webConsole) {
+    const env = readEnvFile();
+    const domain = env.get('DOMAIN') || 'localhost';
+    const protocol = env.get('PROTOCOL') || 'https';
+    const hasPassword = !!(env.get('ZYLOS_WEB_PASSWORD') || env.get('WEB_CONSOLE_PASSWORD'));
+    channels.push({
+      name: 'Web Console',
+      action: `${protocol}://${domain}`,
+      type: 'web',
+      online: webConsole.pm2_env?.status === 'online' && caddy?.pm2_env?.status === 'online',
+      warning: !hasPassword ? 'no password set' : null,
+    });
+  }
+
+  // Dynamic channels from components.json
+  let components = {};
+  try {
+    components = JSON.parse(fs.readFileSync(COMPONENTS_FILE, 'utf8'));
+  } catch {}
+
+  for (const [name, info] of Object.entries(components)) {
+    const pm2Name = `zylos-${name}`;
+    const proc = pm2Procs.find(p => p.name === pm2Name);
+    if (!proc) continue;
+
+    // Check if this component has a PM2 service (channel indicator)
+    // Skip non-channel components (browser, imagegen, etc.)
+    const skillDir = info.skillDir;
+    let isChannel = false;
+    if (skillDir) {
+      try {
+        const skillMd = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+        // Heuristic: if SKILL.md mentions "communication", "channel", "message", or "connector"
+        isChannel = /\b(communication|channel|messaging|connector|chat|bot)\b/i.test(skillMd);
+      } catch {}
+    }
+    // Fallback: known channel patterns
+    if (!isChannel) {
+      isChannel = /^(telegram|lark|feishu|discord|slack|whatsapp|wechat|matrix)$/i.test(name);
+    }
+    // botshub is agent-to-agent, also include
+    if (name === 'botshub') isChannel = true;
+
+    if (!isChannel) continue;
+
+    channels.push({
+      name: name.charAt(0).toUpperCase() + name.slice(1),
+      action: `@zylos (${name})`,
+      type: 'external',
+      online: proc.pm2_env?.status === 'online',
+    });
+  }
+
+  return channels;
+}
+
+// ── Main doctor flow ─────────────────────────────────────────────
+
+export async function doctorCommand(args) {
+  const checkOnly = args.includes('--check');
+
+  console.log(`\n${heading('Checking your Zylos setup...')}\n`);
+  logToFile('doctor started' + (checkOnly ? ' (--check)' : ''));
+
+  const issues = [];
+  let skipRemaining = false;
+
+  // ── Group 1: System ──────────────────────────────────────────
+
+  const systemChecks = [];
+  let systemPassed = true;
+
+  // 1a. tmux
+  const tmuxOk = checkTmuxInstalled();
+  systemChecks.push(tmuxOk ? 'tmux installed' : red('tmux not installed'));
+  if (!tmuxOk) {
+    systemPassed = false;
+    issues.push({
+      label: 'tmux is not installed',
+      detail: 'tmux is required for the Claude session.',
+      fixLabel: 'install tmux (sudo apt install tmux)',
+      fix: fixTmux,
+      type: 'auto',
+    });
+  }
+
+  // 1b. PM2
+  const pm2Ok = checkPm2Installed();
+  systemChecks.push(pm2Ok ? 'PM2 installed' : red('PM2 not installed'));
+  if (!pm2Ok) {
+    systemPassed = false;
+    issues.push({
+      label: 'PM2 is not installed',
+      detail: 'PM2 manages Zylos background services.',
+      fixLabel: 'install PM2 (npm install -g pm2)',
+      fix: fixPm2,
+      type: 'auto',
+    });
+  }
+
+  // 1c. Network
+  const net = await checkNetwork();
+  if (net.reachable) {
+    let netLabel = `network: ${API_HOST} reachable`;
+    if (net.proxy) netLabel += dim(` (via proxy)`);
+    systemChecks.push(netLabel);
+  } else {
+    systemPassed = false;
+    const netDetail = [];
+    if (!net.dns) {
+      systemChecks.push(red(`network: DNS failed for ${API_HOST}`));
+      netDetail.push(`DNS resolution: ${red('failed')} ${dim(`(${net.details.dnsError})`)}`);
+    } else {
+      systemChecks.push(red(`network: cannot reach ${API_HOST}`));
+      netDetail.push(`DNS resolution: ${green('✓')} resolved to ${net.details.resolved}`);
+    }
+    if (net.proxy) {
+      netDetail.push(`Proxy (HTTPS_PROXY): ${net.proxy}`);
+      if (net.details.proxyIssue) {
+        netDetail.push(`Proxy reachable: ${red('✗')} (direct connection works — proxy may be down)`);
+      }
+    }
+    issues.push({
+      label: `Cannot reach AI service (${API_HOST})`,
+      detail: netDetail.join('\n      '),
+      fixLabel: null, // Cannot auto-fix
+      fix: null,
+      type: 'manual',
+      hint: net.proxy
+        ? `Check HTTPS_PROXY in ${ENV_FILE}\n      Current value: ${net.proxy}`
+        : 'Check your internet connection and firewall settings.',
+    });
+  }
+
+  // Display Group 1
+  console.log(groupHeader('System', systemPassed ? 'pass' : 'fail'));
+  for (let i = 0; i < systemChecks.length; i++) {
+    console.log(i < systemChecks.length - 1 ? SUB(systemChecks[i]) : SUB_LAST(systemChecks[i]));
+  }
+
+  // If network failed, skip remaining groups
+  if (!net.reachable) {
+    skipRemaining = true;
+  }
+
+  // ── Group 2: AI Service ──────────────────────────────────────
+
+  const aiChecks = [];
+  let aiPassed = true;
+
+  if (skipRemaining) {
+    console.log(groupHeader('AI Service', 'skip'));
+    console.log(SKIP('skipped (requires network)'));
+  } else {
+    const cli = checkClaudeCli();
+    if (cli.installed) {
+      aiChecks.push(`Claude CLI ${dim(cli.version)}`);
+    } else {
+      aiPassed = false;
+      aiChecks.push(red('Claude CLI not installed'));
+      issues.push({
+        label: 'Claude CLI is not installed',
+        detail: 'The Claude CLI is required for Zylos to function.',
+        fixLabel: 'install Claude CLI',
+        fix: fixClaudeCli,
+        type: 'auto',
+      });
+    }
+
+    if (cli.installed) {
+      const authOk = checkClaudeAuth();
+      if (authOk) {
+        aiChecks.push('authorized');
+      } else {
+        aiPassed = false;
+        aiChecks.push(red('not authorized'));
+        issues.push({
+          label: 'Claude is not authorized',
+          detail: 'Claude needs API authorization to work.',
+          fixLabel: 'opens the Claude login flow (interactive)',
+          fix: fixClaudeAuth,
+          type: 'interactive',
+        });
+      }
+      // Check autonomous mode (terms acceptance)
+      if (authOk) {
+        const autoMode = checkAutonomousMode();
+        if (autoMode) {
+          aiChecks.push('autonomous mode accepted');
+        } else {
+          aiPassed = false;
+          aiChecks.push(red('autonomous mode not accepted'));
+          issues.push({
+            label: 'Autonomous mode not accepted',
+            detail: 'Claude needs autonomous mode enabled to run unattended.',
+            fixLabel: 'enable autonomous mode in Claude settings',
+            fix: fixAutonomousMode,
+            type: 'auto',
+          });
+        }
+      }
+    } else {
+      aiChecks.push(dim('auth check skipped (requires CLI)'));
+    }
+
+    console.log(groupHeader('AI Service', aiPassed ? 'pass' : 'fail'));
+    for (let i = 0; i < aiChecks.length; i++) {
+      console.log(i < aiChecks.length - 1 ? SUB(aiChecks[i]) : SUB_LAST(aiChecks[i]));
+    }
+
+    if (!aiPassed) skipRemaining = true;
+  }
+
+  // ── Group 3: Services ────────────────────────────────────────
+
+  const svcChecks = [];
+  let svcPassed = true;
+  let pm2Result = null;
+
+  if (skipRemaining) {
+    console.log(groupHeader('Services', 'skip'));
+    console.log(SKIP('skipped (requires AI Service)'));
+  } else {
+    pm2Result = checkPm2Services();
+    if (pm2Result.running && pm2Result.activityMonitor) {
+      svcChecks.push(`activity-monitor: ${green('online')}`);
+    } else if (pm2Result.running) {
+      svcPassed = false;
+      svcChecks.push(red('activity-monitor: not running'));
+    } else {
+      svcPassed = false;
+      svcChecks.push(red('PM2 services not started'));
+    }
+
+    if (!pm2Result.running || !pm2Result.activityMonitor) {
+      issues.push({
+        label: 'Zylos services are not running',
+        detail: 'The activity monitor keeps Claude alive.',
+        fixLabel: 'start all services',
+        fix: fixServices,
+        type: 'auto',
+      });
+    }
+
+    const sessionOk = checkTmuxSession();
+    if (sessionOk) {
+      svcChecks.push(`Claude session: ${green('active')}`);
+    } else if (pm2Result.activityMonitor) {
+      // activity-monitor is running but session isn't up yet — might be starting
+      svcChecks.push(yellow('Claude session: starting...'));
+    } else {
+      svcPassed = false;
+      svcChecks.push(dim('Claude session: waiting'));
+    }
+
+    console.log(groupHeader('Services', svcPassed ? 'pass' : 'fail'));
+    for (let i = 0; i < svcChecks.length; i++) {
+      console.log(i < svcChecks.length - 1 ? SUB(svcChecks[i]) : SUB_LAST(svcChecks[i]));
+    }
+  }
+
+  // ── Handle issues ────────────────────────────────────────────
+
+  if (issues.length > 0) {
+    const fixable = issues.filter(i => i.fix);
+    const manual = issues.filter(i => !i.fix);
+
+    console.log(separator('Issues'));
+
+    for (let i = 0; i < issues.length; i++) {
+      const issue = issues[i];
+      console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
+      if (issue.detail) {
+        console.log(`      ${dim(issue.detail)}`);
+      }
+      if (issue.fixLabel) {
+        console.log(`      Fix: ${issue.fixLabel}`);
+      }
+      if (issue.hint) {
+        console.log(`\n      ${issue.hint}`);
+      }
+    }
+
+    // Manual-only issues — can't fix, just report
+    if (fixable.length === 0) {
+      console.log(`\n  ${yellow('Cannot proceed — fix the issues above and run')} ${bold('zylos doctor')} ${yellow('again.')}`);
+      logToFile('result: issues found, no auto-fix available');
+      process.exit(1);
+    }
+
+    // Check-only mode
+    if (checkOnly) {
+      console.log(`\n  ${dim(`${fixable.length} fixable issue(s). Run`)} ${bold('zylos doctor')} ${dim('(without --check) to fix.')}`);
+      logToFile('result: issues found, --check mode');
+      process.exit(1);
+    }
+
+    // Ask to fix
+    console.log('');
+    const fixPrompt = fixable.length === 1
+      ? `Fix this issue? [y/N] `
+      : `Fix all ${fixable.length} issues? [y/N] `;
+    const shouldFix = await promptYesNo(fixPrompt);
+
+    if (!shouldFix) {
+      console.log(`\n  ${dim('Skipped. Run')} ${bold('zylos doctor')} ${dim('when ready.')}`);
+      logToFile('result: user declined fixes');
+      process.exit(1);
+    }
+
+    // Apply fixes
+    const fixed = [];
+    const failed = [];
+
+    for (let i = 0; i < fixable.length; i++) {
+      const issue = fixable[i];
+      const progress = fixable.length > 1 ? `[${i + 1}/${fixable.length}] ` : '';
+      process.stdout.write(`\n  ${progress}${issue.fixLabel}... `);
+      logToFile(`fix: ${issue.label} — user confirmed`);
+
+      const ok = await issue.fix();
+      if (ok) {
+        console.log(green('✓'));
+        logToFile(`fix: ${issue.label} — success`);
+        fixed.push(issue.label);
+      } else {
+        console.log(red('✗'));
+        logToFile(`fix: ${issue.label} — failed`);
+        failed.push(issue.label);
+      }
+    }
+
+    // Re-check skipped groups after fixes
+    if (fixed.length > 0 && skipRemaining) {
+      console.log(`\n${dim('Re-checking...')}`);
+
+      // Re-check what was skipped
+      if (!net.reachable) {
+        // Network was the blocker — can't re-check without network fix
+      } else {
+        // AI Service was the blocker — re-check
+        const cli2 = checkClaudeCli();
+        const auth2 = cli2.installed ? checkClaudeAuth() : false;
+
+        if (cli2.installed && auth2) {
+          console.log(groupHeader('AI Service', 'pass'));
+          console.log(SUB(`Claude CLI ${dim(cli2.version)}`));
+          console.log(SUB_LAST('authorized'));
+
+          // Now check services
+          const svc2 = checkPm2Services();
+          const session2 = checkTmuxSession();
+
+          if (!svc2.activityMonitor) {
+            // Try starting services
+            fixServices();
+            // Wait a moment for activity-monitor to create session
+            await new Promise(r => setTimeout(r, 3000));
+          }
+
+          const svc3 = checkPm2Services();
+          const session3 = checkTmuxSession();
+
+          console.log(groupHeader('Services', svc3.activityMonitor ? 'pass' : 'fail'));
+          console.log(SUB(`activity-monitor: ${svc3.activityMonitor ? green('online') : red('offline')}`));
+          console.log(SUB_LAST(`Claude session: ${session3 ? green('active') : yellow('starting...')}`));
+
+          pm2Result = svc3;
+        }
+      }
+    }
+
+    // Summary
+    if (fixed.length > 0 || failed.length > 0 || manual.length > 0) {
+      console.log(separator('Summary'));
+
+      if (fixed.length > 0) {
+        console.log(`\n  ${green('Fixed:')}`);
+        fixed.forEach(f => console.log(`    ${green('✓')} ${f}`));
+      }
+      if (failed.length > 0) {
+        console.log(`\n  ${red('Failed:')}`);
+        failed.forEach(f => console.log(`    ${red('✗')} ${f}`));
+      }
+      if (manual.length > 0) {
+        console.log(`\n  ${yellow('Needs attention:')}`);
+        manual.forEach(m => console.log(`    ${yellow('○')} ${m.label}`));
+      }
+    }
+
+    if (failed.length > 0 || manual.length > 0) {
+      logToFile('result: partially fixed');
+      // Don't exit yet — still show channels if services are up
+    }
+  }
+
+  // ── Group 4: Channels ────────────────────────────────────────
+
+  const procs = pm2Result?.procs || [];
+  if (procs.length > 0 || checkTmuxSession()) {
+    const channels = discoverChannels(procs);
+    const onlineChannels = channels.filter(c => c.online);
+    const offlineChannels = channels.filter(c => !c.online);
+
+    console.log(`\n${bold('Channels')}`);
+    for (const ch of onlineChannels) {
+      const warn = ch.warning ? ` ${yellow(`(${ch.warning})`)}` : '';
+      console.log(BULLET_ON(`${ch.name.padEnd(16)} ${dim(ch.action)}${warn}`));
+    }
+    for (const ch of offlineChannels) {
+      console.log(BULLET_OFF(`${ch.name.padEnd(16)} ${dim('offline')}`));
+    }
+
+    if (offlineChannels.length > 0 && onlineChannels.length > 0) {
+      console.log(`\n  ${dim('Offline channels can be fixed after connecting — ask Claude.')}`);
+    }
+  }
+
+  // ── Group 5: Updates ────────────────────────────────────────
+
+  if (!skipRemaining) {
+    try {
+      const updates = [];
+
+      // Check zylos-core itself
+      const coreVersion = getCurrentVersion();
+      if (coreVersion.success) {
+        try {
+          const latest = fetchLatestTag('zylos-ai/zylos-core');
+          if (latest && latest !== coreVersion.version) {
+            updates.push({ name: 'zylos-core', current: coreVersion.version, latest });
+          }
+        } catch {}
+      }
+
+      // Check installed components
+      const components = loadComponents();
+      for (const [name, info] of Object.entries(components)) {
+        if (!info.repo || !info.version) continue;
+        try {
+          const latest = fetchLatestTag(info.repo);
+          if (latest && latest !== info.version) {
+            updates.push({ name, current: info.version, latest });
+          }
+        } catch {}
+      }
+
+      if (updates.length > 0) {
+        console.log(`\n${bold('Updates available')}`);
+        for (const u of updates) {
+          console.log(`  ${u.name.padEnd(16)} ${dim(u.current)} → ${green(u.latest)}`);
+        }
+        console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
+      }
+    } catch {}
+  }
+
+  // ── Final status ─────────────────────────────────────────────
+
+  const hasUnresolved = issues.some(i => !i.fix) || issues.length > 0;
+  if (issues.length === 0) {
+    console.log(`\n${green('✓ Everything is working.')}\n`);
+    logToFile('result: all checks passed');
+    process.exit(0);
+  } else {
+    const allFixed = issues.every(i => i.fix);
+    if (allFixed && !checkOnly) {
+      console.log(`\n${green('✓ All issues fixed.')}\n`);
+      logToFile('result: all issues fixed');
+      process.exit(0);
+    } else {
+      console.log('');
+      logToFile('result: issues remain');
+      process.exit(1);
+    }
+  }
+}
