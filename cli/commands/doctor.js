@@ -5,12 +5,12 @@
  * Design: https://github.com/zylos-ai/zylos-core/issues/202
  */
 
-import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
-import { ZYLOS_DIR, COMPONENTS_FILE, ENV_FILE } from '../lib/config.js';
+import { ZYLOS_DIR, ENV_FILE } from '../lib/config.js';
 import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTag } from '../lib/github.js';
@@ -66,9 +66,8 @@ function checkPm2Installed() {
   return commandExists('pm2');
 }
 
-async function checkNetwork() {
+async function checkNetwork(env) {
   const results = { dns: false, proxy: null, reachable: false, details: {} };
-  const env = readEnvFile();
   const proxy = env.get('HTTPS_PROXY') || env.get('https_proxy') || process.env.HTTPS_PROXY || '';
 
   if (proxy) {
@@ -120,7 +119,9 @@ function checkClaudeCli() {
   if (!commandExists('claude')) return { installed: false };
   let version = 'unknown';
   try {
-    version = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
+    version = execFileSync('claude', ['--version'], {
+      encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
   } catch {}
   return { installed: true, version };
 }
@@ -128,7 +129,7 @@ function checkClaudeCli() {
 function checkClaudeAuth() {
   try {
     const result = spawnSync('claude', ['auth', 'status'], {
-      stdio: 'pipe', encoding: 'utf8', timeout: 15000,
+      stdio: 'pipe', encoding: 'utf8', timeout: 30000,
     });
     return result.status === 0;
   } catch {
@@ -148,7 +149,9 @@ function checkAutonomousMode() {
 
 function checkPm2Services() {
   try {
-    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const output = execFileSync('pm2', ['jlist'], {
+      encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
+    });
     const procs = JSON.parse(output);
     const activityMon = procs.find(p => p.name === 'activity-monitor');
     return {
@@ -165,7 +168,9 @@ function checkPm2Services() {
 
 function checkTmuxSession() {
   try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+    execFileSync('tmux', ['has-session', '-t', SESSION], {
+      stdio: 'pipe', timeout: 30000,
+    });
     return true;
   } catch {
     return false;
@@ -179,9 +184,9 @@ function fixTmux() {
   const platform = os.platform();
   try {
     if (platform === 'darwin') {
-      execSync('brew install tmux', { stdio: 'inherit' });
+      execFileSync('brew', ['install', 'tmux'], { stdio: 'inherit', timeout: 600000 });
     } else {
-      execSync('sudo apt-get install -y tmux', { stdio: 'inherit' });
+      execFileSync('sudo', ['apt-get', 'install', '-y', 'tmux'], { stdio: 'inherit', timeout: 600000 });
     }
     return { ok: commandExists('tmux') };
   } catch (err) {
@@ -194,7 +199,7 @@ function fixTmux() {
 
 function fixPm2() {
   try {
-    execSync('npm install -g pm2', { stdio: 'inherit' });
+    execFileSync('npm', ['install', '-g', 'pm2'], { stdio: 'inherit', timeout: 600000 });
     return { ok: commandExists('pm2') };
   } catch (err) {
     return { ok: false, error: 'npm install failed' };
@@ -202,11 +207,17 @@ function fixPm2() {
 }
 
 function fixClaudeCli() {
+  const tmpFile = path.join(os.tmpdir(), 'claude-install.sh');
   try {
-    execSync('curl -fsSL https://claude.ai/install.sh | sh', { stdio: 'inherit' });
+    execFileSync('curl', ['-fsSL', '-o', tmpFile, 'https://claude.ai/install.sh'], {
+      stdio: 'pipe', timeout: 600000,
+    });
+    execFileSync('sh', [tmpFile], { stdio: 'inherit', timeout: 600000 });
     return { ok: commandExists('claude') };
   } catch (err) {
     return { ok: false, error: 'install script failed' };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
   }
 }
 
@@ -239,10 +250,15 @@ function fixServices() {
   try {
     const ecosystemFile = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
     if (fs.existsSync(ecosystemFile)) {
-      execFileSync('pm2', ['start', ecosystemFile], { stdio: 'pipe' });
-      execFileSync('pm2', ['save'], { stdio: 'pipe' });
+      execFileSync('pm2', ['start', ecosystemFile], { stdio: 'pipe', timeout: 60000 });
+      execFileSync('pm2', ['save'], { stdio: 'pipe', timeout: 60000 });
     } else {
-      execFileSync('zylos', ['start'], { stdio: 'pipe' });
+      execFileSync('zylos', ['start'], { stdio: 'pipe', timeout: 60000 });
+    }
+    // Verify activity-monitor actually came online
+    const verify = checkPm2Services();
+    if (!verify.activityMonitor) {
+      return { ok: false, error: 'services started but activity-monitor is not online' };
     }
     return { ok: true };
   } catch (err) {
@@ -252,7 +268,7 @@ function fixServices() {
 
 // ── Channel discovery ────────────────────────────────────────────
 
-function discoverChannels(pm2Procs) {
+function discoverChannels(pm2Procs, env, tmuxSession) {
   const channels = [];
 
   // tmux is always a channel if session exists
@@ -260,14 +276,13 @@ function discoverChannels(pm2Procs) {
     name: 'tmux',
     action: 'zylos attach',
     type: 'terminal',
-    online: checkTmuxSession(),
+    online: tmuxSession,
   });
 
   // Web console — built-in, check PM2
   const webConsole = pm2Procs.find(p => p.name === 'web-console');
   const caddy = pm2Procs.find(p => p.name === 'caddy');
   if (webConsole) {
-    const env = readEnvFile();
     const domain = env.get('DOMAIN') || 'localhost';
     const protocol = env.get('PROTOCOL') || 'https';
     const hasPassword = !!(env.get('ZYLOS_WEB_PASSWORD') || env.get('WEB_CONSOLE_PASSWORD'));
@@ -281,12 +296,7 @@ function discoverChannels(pm2Procs) {
   }
 
   // Dynamic channels from components.json — use SKILL.md frontmatter type
-  let components = {};
-  try {
-    components = JSON.parse(fs.readFileSync(COMPONENTS_FILE, 'utf8'));
-  } catch (err) {
-    logToFile(`warn: failed to read components.json: ${err.message}`);
-  }
+  const components = loadComponents();
 
   for (const [name, info] of Object.entries(components)) {
     const pm2Name = `zylos-${name}`;
@@ -329,12 +339,14 @@ export async function doctorCommand(args) {
   console.log(`\n${heading('Checking your Zylos setup...')}\n`);
   logToFile('doctor started' + (checkOnly ? ' (--check)' : ''));
 
+  const env = readEnvFile();
   const issues = [];
   let skipRemaining = false;
 
   // ── Group 1: System ──────────────────────────────────────────
 
   const systemChecks = [];
+  const systemFailed = [];
   let systemPassed = true;
 
   // 1a. tmux
@@ -342,6 +354,7 @@ export async function doctorCommand(args) {
   systemChecks.push(tmuxOk ? 'tmux installed' : red('tmux not installed'));
   if (!tmuxOk) {
     systemPassed = false;
+    systemFailed.push('tmux missing');
     const isMac = os.platform() === 'darwin';
     issues.push({
       label: 'tmux is not installed',
@@ -356,6 +369,7 @@ export async function doctorCommand(args) {
   systemChecks.push(pm2Ok ? 'PM2 installed' : red('PM2 not installed'));
   if (!pm2Ok) {
     systemPassed = false;
+    systemFailed.push('PM2 missing');
     issues.push({
       label: 'PM2 is not installed',
       detail: 'PM2 manages Zylos background services.',
@@ -365,13 +379,14 @@ export async function doctorCommand(args) {
   }
 
   // 1c. Network
-  const net = await checkNetwork();
+  const net = await checkNetwork(env);
   if (net.reachable) {
     let netLabel = `network: ${API_HOST} reachable`;
     if (net.proxy) netLabel += dim(` (via proxy)`);
     systemChecks.push(netLabel);
   } else {
     systemPassed = false;
+    systemFailed.push('network unreachable');
     const netDetail = [];
     if (!net.dns) {
       systemChecks.push(red(`network: DNS failed for ${API_HOST}`));
@@ -402,7 +417,7 @@ export async function doctorCommand(args) {
   for (let i = 0; i < systemChecks.length; i++) {
     console.log(i < systemChecks.length - 1 ? SUB(systemChecks[i]) : SUB_LAST(systemChecks[i]));
   }
-  logToFile(`check: system — ${systemPassed ? 'passed' : 'failed'}`);
+  logToFile(`check: system — ${systemPassed ? 'passed' : `failed (${systemFailed.join(', ')})`}`);
 
   // If network failed, skip remaining groups
   if (!net.reachable) {
@@ -412,6 +427,7 @@ export async function doctorCommand(args) {
   // ── Group 2: AI Service ──────────────────────────────────────
 
   const aiChecks = [];
+  const aiFailed = [];
   let aiPassed = true;
 
   if (skipRemaining) {
@@ -424,6 +440,7 @@ export async function doctorCommand(args) {
       aiChecks.push(`Claude CLI ${dim(cli.version)}`);
     } else {
       aiPassed = false;
+      aiFailed.push('CLI not installed');
       aiChecks.push(red('Claude CLI not installed'));
       issues.push({
         label: 'Claude CLI is not installed',
@@ -439,6 +456,7 @@ export async function doctorCommand(args) {
         aiChecks.push('authorized');
       } else {
         aiPassed = false;
+        aiFailed.push('not authorized');
         aiChecks.push(red('not authorized'));
         issues.push({
           label: 'Claude is not authorized',
@@ -454,6 +472,7 @@ export async function doctorCommand(args) {
           aiChecks.push('autonomous mode accepted');
         } else {
           aiPassed = false;
+          aiFailed.push('autonomous mode');
           aiChecks.push(red('autonomous mode not accepted'));
           issues.push({
             label: 'Autonomous mode not accepted',
@@ -471,7 +490,7 @@ export async function doctorCommand(args) {
     for (let i = 0; i < aiChecks.length; i++) {
       console.log(i < aiChecks.length - 1 ? SUB(aiChecks[i]) : SUB_LAST(aiChecks[i]));
     }
-    logToFile(`check: ai_service — ${aiPassed ? 'passed' : 'failed'}`);
+    logToFile(`check: ai_service — ${aiPassed ? 'passed' : `failed (${aiFailed.join(', ')})`}`);
 
     if (!aiPassed) skipRemaining = true;
   }
@@ -479,6 +498,7 @@ export async function doctorCommand(args) {
   // ── Group 3: Services ────────────────────────────────────────
 
   const svcChecks = [];
+  const svcFailed = [];
   let svcPassed = true;
   let pm2Result = null;
 
@@ -492,9 +512,11 @@ export async function doctorCommand(args) {
       svcChecks.push(`activity-monitor: ${green('online')}`);
     } else if (pm2Result.running) {
       svcPassed = false;
+      svcFailed.push('activity-monitor not running');
       svcChecks.push(red('activity-monitor: not running'));
     } else {
       svcPassed = false;
+      svcFailed.push('PM2 services not started');
       svcChecks.push(red('PM2 services not started'));
     }
 
@@ -515,6 +537,7 @@ export async function doctorCommand(args) {
       svcChecks.push(yellow('Claude session: starting...'));
     } else {
       svcPassed = false;
+      svcFailed.push('session not running');
       svcChecks.push(dim('Claude session: waiting'));
     }
 
@@ -522,7 +545,7 @@ export async function doctorCommand(args) {
     for (let i = 0; i < svcChecks.length; i++) {
       console.log(i < svcChecks.length - 1 ? SUB(svcChecks[i]) : SUB_LAST(svcChecks[i]));
     }
-    logToFile(`check: services — ${svcPassed ? 'passed' : 'failed'}`);
+    logToFile(`check: services — ${svcPassed ? 'passed' : `failed (${svcFailed.join(', ')})`}`);
   }
 
   // ── Handle issues ────────────────────────────────────────────
@@ -638,10 +661,6 @@ export async function doctorCommand(args) {
           console.log(SUB_LAST(autoMode2 ? 'autonomous mode accepted' : red('autonomous mode not accepted')));
           logToFile(`re-check: ai_service — ${aiPass2 ? 'passed' : 'failed'}`);
 
-          if (!aiPass2) {
-            failed.push('Autonomous mode not accepted');
-          }
-
           // Now check services
           const svc2 = checkPm2Services();
 
@@ -718,8 +737,9 @@ export async function doctorCommand(args) {
   // ── Group 4: Channels ────────────────────────────────────────
 
   const procs = pm2Result?.procs || [];
-  if (procs.length > 0 || checkTmuxSession()) {
-    const channels = discoverChannels(procs);
+  const tmuxSession = checkTmuxSession();
+  if (procs.length > 0 || tmuxSession) {
+    const channels = discoverChannels(procs, env, tmuxSession);
     const onlineChannels = channels.filter(c => c.online);
     const offlineChannels = channels.filter(c => !c.online);
 
