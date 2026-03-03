@@ -458,15 +458,29 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
   const webConsole = pm2Procs.find(p => p.name === 'web-console');
   const caddy = pm2Procs.find(p => p.name === 'caddy');
   if (webConsole) {
-    const domain = env.get('DOMAIN') || 'localhost';
-    const protocol = env.get('PROTOCOL') || 'https';
+    const caddyOnline = caddy?.pm2_env?.status === 'online';
+    const wcOnline = webConsole.pm2_env?.status === 'online';
     const hasPassword = !!(env.get('ZYLOS_WEB_PASSWORD') || env.get('WEB_CONSOLE_PASSWORD'));
+
+    // Use domain URL if Caddy is running, otherwise localhost direct access
+    let action;
+    let warning = null;
+    if (caddyOnline) {
+      const domain = env.get('DOMAIN') || 'localhost';
+      const protocol = env.get('PROTOCOL') || 'https';
+      action = `${protocol}://${domain}/console/`;
+      if (!hasPassword) warning = 'no password set';
+    } else {
+      action = 'http://localhost:3456/console/';
+      warning = 'local only — Caddy not configured';
+    }
+
     channels.push({
       name: 'Web Console',
-      action: `${protocol}://${domain}`,
+      action,
       type: 'web',
-      online: webConsole.pm2_env?.status === 'online' && caddy?.pm2_env?.status === 'online',
-      warning: !hasPassword ? 'no password set' : null,
+      online: wcOnline,
+      warning,
     });
   }
 
@@ -835,8 +849,15 @@ export async function doctorCommand(args) {
       console.log(BULLET_OFF(`${ch.name.padEnd(16)} ${dim('offline')}`));
     }
 
-    if (offlineChannels.length > 0 && onlineChannels.length > 0) {
-      console.log(`\n  ${dim('Offline channels can be fixed after connecting — ask Claude.')}`);
+    if (offlineChannels.length > 0) {
+      if (onlineChannels.length > 0) {
+        console.log(`\n  ${dim('To configure offline channels, connect via:')}`);
+        for (const ch of onlineChannels) {
+          console.log(`    ${dim(ch.action)}`);
+        }
+      } else {
+        console.log(`\n  ${dim('Run')} ${bold('zylos init')} ${dim('to set up channels.')}`);
+      }
     }
   }
 
@@ -901,7 +922,7 @@ export async function doctorCommand(args) {
     if (manual.length > 0 || offlineChannels.length > 0) {
       console.log(`\n  ${yellow('Needs attention:')}`);
       manual.forEach(m => console.log(`    ${yellow('○')} ${m.label}`));
-      offlineChannels.forEach(ch => console.log(`    ${yellow('○')} ${ch.name} offline — connect via any working channel, ask Claude to fix`));
+      offlineChannels.forEach(ch => console.log(`    ${yellow('○')} ${ch.name} offline`));
     }
   }
 
