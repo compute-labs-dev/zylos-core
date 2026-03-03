@@ -589,12 +589,6 @@ function isClaudeReady(diag) {
   return diag.ai.cli.installed && diag.ai.auth && diag.system.network.reachable;
 }
 
-// Issues fixable by `zylos init` — infrastructure problems, not component-specific
-const INIT_FIXABLE = new Set([
-  'tmux_missing', 'pm2_missing', 'cli_missing', 'cli_not_authed',
-  'autonomous_off', 'network_unreachable', 'services_down',
-]);
-
 function runClaudeFix(diagnosticJson) {
   const issueList = diagnosticJson.issues.map(i => `- ${i.label}`).join('\n');
   const prompt = [
@@ -869,25 +863,22 @@ export async function doctorCommand(args) {
       process.exit(0);
     }
 
-    // Still issues
+    // Still issues — show hints so user knows what to do
     console.log(`\n  ${yellow(`${reverify.issues.length} issue(s) remain:`)}`);
     for (const issue of reverify.issues) {
       console.log(`    ${yellow('○')} ${issue.label}`);
+      if (issue.hint) console.log(`      ${dim(issue.hint)}`);
     }
-    if (reverify.issues.some(i => INIT_FIXABLE.has(i.id))) {
-      console.log(`\n  Run ${bold('zylos init')} to resolve these issues.\n`);
-    } else {
-      console.log(`\n  ${dim('Check the hints above to resolve remaining issues.')}\n`);
-    }
+    console.log('');
     logToFile(`result: ${reverify.issues.length} issues remain after claude fix`);
     process.exit(1);
   }
 
-  // Claude not available — show manual hints
-  if (diagnostic.issues.some(i => INIT_FIXABLE.has(i.id))) {
-    console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up and resolve these issues.')}\n`);
+  // Claude not available — bottom message based on why
+  if (!diag.system.network.reachable) {
+    console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
-    console.log('');
+    console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up Claude, then run')} ${bold('zylos doctor')} ${yellow('again for auto-repair.')}\n`);
   }
   logToFile('result: issues found, claude not available for auto-fix');
   process.exit(1);
