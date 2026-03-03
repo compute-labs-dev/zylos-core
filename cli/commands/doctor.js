@@ -586,9 +586,14 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
-  if (process.getuid?.() === 0) return false; // Claude CLI refuses --dangerously-skip-permissions as root
   return diag.ai.cli.installed && diag.ai.auth && diag.system.network.reachable;
 }
+
+// Issues fixable by `zylos init` — infrastructure problems, not component-specific
+const INIT_FIXABLE = new Set([
+  'tmux_missing', 'pm2_missing', 'cli_missing', 'cli_not_authed',
+  'autonomous_off', 'network_unreachable', 'services_down',
+]);
 
 function runClaudeFix(diagnosticJson) {
   const issueList = diagnosticJson.issues.map(i => `- ${i.label}`).join('\n');
@@ -869,13 +874,21 @@ export async function doctorCommand(args) {
     for (const issue of reverify.issues) {
       console.log(`    ${yellow('○')} ${issue.label}`);
     }
-    console.log(`\n  Run ${bold('zylos init')} to resolve these issues.\n`);
+    if (reverify.issues.some(i => INIT_FIXABLE.has(i.id))) {
+      console.log(`\n  Run ${bold('zylos init')} to resolve these issues.\n`);
+    } else {
+      console.log(`\n  ${dim('Check the hints above to resolve remaining issues.')}\n`);
+    }
     logToFile(`result: ${reverify.issues.length} issues remain after claude fix`);
     process.exit(1);
   }
 
   // Claude not available — show manual hints
-  console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up and resolve these issues.')}\n`);
+  if (diagnostic.issues.some(i => INIT_FIXABLE.has(i.id))) {
+    console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up and resolve these issues.')}\n`);
+  } else {
+    console.log('');
+  }
   logToFile('result: issues found, claude not available for auto-fix');
   process.exit(1);
 }
