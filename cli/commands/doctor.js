@@ -878,7 +878,7 @@ export async function doctorCommand(args) {
   if (!diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
-    console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up Claude, then run')} ${bold('zylos doctor')} ${yellow('again for auto-repair.')}\n`);
+    console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);
   }
   logToFile('result: issues found, claude not available for auto-fix');
   process.exit(1);
