@@ -271,9 +271,11 @@ function runAiChecks() {
       checks.push(red('not authorized'));
       issues.push({
         label: 'Claude is not authorized',
-        detail: 'Claude needs API authorization to work.',
-        fixLabel: 'opens the Claude login flow (interactive)',
-        fix: fixClaudeAuth,
+        detail: 'Claude needs authorization to work with Zylos.',
+        hint: `${dim('Authenticate using one of these methods:')}\n`
+            + `      ${bold('1.')} ${dim('Claude subscription:')} zylos init  ${dim('(opens browser login)')}\n`
+            + `      ${bold('2.')} ${dim('API key:')} zylos init --api-key sk-ant-xxx\n`
+            + `      ${bold('3.')} ${dim('Setup token:')} zylos init --setup-token sk-ant-oat-xxx`,
       });
     }
     if (authOk) {
@@ -406,15 +408,6 @@ function fixClaudeCli() {
   }
 }
 
-function fixClaudeAuth() {
-  try {
-    spawnSync('claude', ['login'], { stdio: 'inherit' });
-    const ok = checkClaudeAuth();
-    return { ok, error: ok ? undefined : 'login completed but auth check still fails' };
-  } catch (err) {
-    return { ok: false, error: 'claude login failed' };
-  }
-}
 
 function fixAutonomousMode() {
   try {
