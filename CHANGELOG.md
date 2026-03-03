@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-04
+
+### Added
+- **`zylos doctor` command**: two-layer diagnostic and auto-repair system — Layer 1 runs health checks (tmux, PM2, network, Claude CLI, services, versions), Layer 2 delegates fixes to Claude when available, otherwise shows manual hints. Supports `--check` flag for diagnosis-only mode (#205, closes #202)
+- **`zylos uninstall --self`**: cleanly remove zylos from the system — stops all services (tmux + PM2), uninstalls the npm package, removes `~/zylos/` and shell PATH entries, with optional interactive cleanup of PM2 and Claude CLI. PM2 service detection uses runtime path matching instead of hardcoded names. `--force` flag for non-interactive mode (#213, closes #212)
+
+### Fixed
+- `zylos init` no longer asks "Start services now?" — services always start unconditionally after init, removing an unnecessary prompt (#210)
+- Install script always shows the `source` reminder after install, regardless of whether the PATH was already configured (#209, closes #207, #208)
+- Resolved 3 Dependabot security alerts: minimatch ReDoS and qs prototype pollution/DoS vulnerabilities (#204)
+
 ## [0.2.7] - 2026-02-28
 
 ### Added
