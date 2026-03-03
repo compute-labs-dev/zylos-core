@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR } from '../lib/config.js';
-import { bold, dim, green, red, cyan, success, error, warn, heading } from '../lib/colors.js';
+import { bold, dim, green, red, cyan, success, warn, heading } from '../lib/colors.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { commandExists } from '../lib/shell-utils.js';
 
@@ -55,7 +55,7 @@ export async function selfUninstall(args) {
   console.log(heading('Phase 1: Stopping services'));
 
   killTmuxSession();
-  const pm2Stopped = stopZylosPm2Services();
+  stopZylosPm2Services();
 
   console.log(success('Services stopped'));
   console.log();
@@ -159,7 +159,9 @@ function stopZylosPm2Services() {
   let processes;
   try {
     const result = spawnSync('pm2', ['jlist'], { encoding: 'utf8', stdio: 'pipe' });
-    processes = JSON.parse(result.stdout);
+    const parsed = JSON.parse(result.stdout);
+    if (!Array.isArray(parsed)) throw new Error('not an array');
+    processes = parsed;
   } catch {
     console.log(`  ${dim('Could not read PM2 process list')}`);
     return false;
@@ -241,19 +243,19 @@ function cleanShellProfiles() {
 
     // Remove lines added by zylos (the comment + the export line)
     const original = content;
-    content = content
-      .split('\n')
-      .filter((line) => {
-        // Remove "# Added by zylos" comment lines
-        if (/^#\s*[Aa]dded by [Zz]ylos/i.test(line)) return false;
-        // Remove PATH exports that reference zylos directories
-        if (/export\s+PATH=.*zylos/i.test(line)) return false;
-        return true;
-      })
-      .join('\n');
+    const lines = content.split('\n');
+    const filtered = lines.filter((line) => {
+      // Remove "# Added by zylos" comment lines
+      if (/^#\s*added by zylos/i.test(line)) return false;
+      // Remove PATH exports that reference zylos directories
+      if (/export\s+PATH=.*zylos/i.test(line)) return false;
+      return true;
+    });
 
-    // Clean up consecutive blank lines left behind
-    content = content.replace(/\n{3,}/g, '\n\n');
+    if (filtered.length === lines.length) continue; // nothing removed
+
+    // Clean up consecutive blank lines left behind by removal
+    content = filtered.join('\n').replace(/\n{3,}/g, '\n\n');
 
     if (content !== original) {
       fs.writeFileSync(filePath, content);
