@@ -71,7 +71,6 @@ ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
 NODE_VERSION="24"               # LTS-track major version
 MIN_NODE_MAJOR=20
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
-NVM_INSTALLED_NOW=false
 
 # ── Colors (disabled if not a terminal) ───────────────────────
 if [ -t 1 ]; then
@@ -197,7 +196,6 @@ ensure_node() {
 
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     info "Installing nvm..."
-    NVM_INSTALLED_NOW=true
     curl -fsSL "$NVM_INSTALL_URL" | bash
   fi
 
@@ -211,6 +209,67 @@ ensure_node() {
   nvm alias default "$NODE_VERSION"
 
   ok "node: $(node -v)"
+}
+
+# ── Ensure PATH in shell profile ─────────────────────────────
+# Auto-add necessary bin directories to the user's shell profile so
+# zylos, pm2, and claude are available in new terminal sessions.
+# Called independently of zylos init — acts as a safety net.
+_ensure_path_in_profile() {
+  # Determine shell rc file (fish uses a different config mechanism)
+  local shell_rc is_fish=false
+  case "${SHELL:-}" in
+    */zsh)  shell_rc="$HOME/.zshrc" ;;
+    */bash) shell_rc="$HOME/.bashrc" ;;
+    */fish) is_fish=true ;;
+    *)      shell_rc="$HOME/.profile" ;;
+  esac
+
+  mkdir -p "$HOME/.local/bin" "$HOME/zylos/bin"
+
+  if [ "$is_fish" = true ]; then
+    # Fish uses a different syntax and config path
+    local fish_conf_dir="$HOME/.config/fish/conf.d"
+    mkdir -p "$fish_conf_dir"
+    local fish_conf="$fish_conf_dir/zylos.fish"
+    if [ ! -f "$fish_conf" ]; then
+      cat > "$fish_conf" <<'FISH_EOF'
+# Added by zylos installer
+fish_add_path -g $HOME/.local/bin
+fish_add_path -g $HOME/zylos/bin
+FISH_EOF
+      ok "PATH configured in conf.d/zylos.fish"
+    fi
+  else
+    # 1. ~/.local/bin — claude installs here
+    #    Idempotency: grep for uncommented ".local/bin" (skip commented-out lines)
+    # shellcheck disable=SC2016
+    local local_bin_export='export PATH="$HOME/.local/bin:$PATH"'
+    if ! grep -q '^[^#]*\.local/bin' "$shell_rc" 2>/dev/null; then
+      printf '\n# Added by zylos installer\n%s\n' "$local_bin_export" >> "$shell_rc"
+    fi
+
+    # 2. ~/zylos/bin — component CLIs (caddy, etc.)
+    #    Idempotency: grep for "zylos-managed: bin PATH" marker (matches init.js pattern)
+    local zylos_marker='# zylos-managed: bin PATH'
+    local zylos_bin_export="export PATH=\"\$HOME/zylos/bin:\$PATH\""
+
+    # Write to ~/.profile (login shells + non-interactive shells)
+    if ! grep -q 'zylos-managed: bin PATH' "$HOME/.profile" 2>/dev/null; then
+      printf '\n%s\n%s\n' "$zylos_marker" "$zylos_bin_export" >> "$HOME/.profile"
+    fi
+    # Write to shell rc file (interactive shells)
+    if [ "$shell_rc" != "$HOME/.profile" ]; then
+      if ! grep -q 'zylos-managed: bin PATH' "$shell_rc" 2>/dev/null; then
+        printf '\n%s\n%s\n' "$zylos_marker" "$zylos_bin_export" >> "$shell_rc"
+      fi
+    fi
+
+    ok "PATH configured in $(basename "$shell_rc")"
+  fi
+
+  # Export for the running script (so zylos init can find binaries)
+  export PATH="$HOME/.local/bin:$HOME/zylos/bin:$PATH"
 }
 
 # ── Install Zylos ─────────────────────────────────────────────
@@ -288,16 +347,49 @@ echo ""
 install_zylos
 
 echo ""
+_ensure_path_in_profile
+echo ""
 ok "Installation complete!"
 echo ""
 
-# Detect the user's shell rc file for hints
+# Detect the user's shell rc file
 _detect_shell_rc() {
   case "${SHELL:-}" in
     */zsh)  echo "~/.zshrc" ;;
     */bash) echo "~/.bashrc" ;;
-    *)      echo "~/.bashrc or ~/.zshrc" ;;
+    */fish) echo "" ;;
+    *)      echo "~/.profile" ;;
   esac
+}
+
+# Show the post-install hint for activating PATH in the current terminal.
+# Styled as a separator + prominent command, not a box (avoids clashing with
+# zylos init's own boxed output).
+_show_source_hint() {
+  local shell_rc
+  shell_rc="$(_detect_shell_rc)"
+
+  echo ""
+  printf '%b' "${CYAN}"
+  echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf '%b' "${NC}"
+  echo ""
+  if [ -n "$shell_rc" ]; then
+    printf '%b' "${BOLD}"
+    echo "  To activate zylos commands in this terminal:"
+    printf '%b' "${NC}"
+    echo ""
+    printf '%b' "${GREEN}${BOLD}"
+    echo "    source $shell_rc"
+    printf '%b' "${NC}"
+  else
+    printf '%b' "${BOLD}"
+    echo "  To activate zylos commands, open a new terminal."
+    printf '%b' "${NC}"
+  fi
+  echo ""
+  info "New terminal sessions will work automatically."
+  echo ""
 }
 
 if [ "$NO_INIT" = true ]; then
@@ -305,11 +397,13 @@ if [ "$NO_INIT" = true ]; then
   shell_rc="$(_detect_shell_rc)"
   info "Skipping zylos init (--no-init)."
   echo ""
-  info "To initialize later, run:"
-  echo ""
-  if [ "$NVM_INSTALLED_NOW" = true ]; then
+  if [ -n "$shell_rc" ]; then
+    info "To initialize later, open a new terminal or run:"
+    echo ""
     echo "    source $shell_rc && zylos init"
   else
+    info "To initialize later, open a new terminal and run:"
+    echo ""
     echo "    zylos init"
   fi
   echo ""
@@ -323,27 +417,7 @@ else
     zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
   fi
 
-  # If nvm was freshly installed, PATH only works inside this subshell.
-  # Show a reminder so the user knows to source their rc file.
-  if [ "$NVM_INSTALLED_NOW" = true ]; then
-    local shell_rc
-    shell_rc="$(_detect_shell_rc)"
-    echo ""
-    printf '%b' "${YELLOW}"
-    echo "  ┌────────────────────────────────────────────────────────┐"
-    echo "  │                                                        │"
-    echo "  │  Setup complete! Your agent is running.                │"
-    echo "  │                                                        │"
-    echo "  │  To use zylos commands in this terminal, run:          │"
-    echo "  │                                                        │"
-    printf "  │    source %-44s │\n" "$shell_rc"
-    echo "  │                                                        │"
-    echo "  │  New terminal sessions will work automatically.        │"
-    echo "  │                                                        │"
-    echo "  └────────────────────────────────────────────────────────┘"
-    printf '%b' "${NC}"
-    echo ""
-  fi
+  _show_source_hint
 fi
 
 } # end of _main — do not remove (partial download guard)
