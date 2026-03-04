@@ -549,10 +549,10 @@ function startClaude() {
     try {
       // -e flags pass env vars to tmux session:
       // - PATH: ensures Claude is found even if tmux server has different env
-      // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
+      // - IS_SANDBOX=1: allows --dangerously-skip-permissions (always set in managed environments)
       // - ANTHROPIC_API_KEY: for API key auth (only when no native login)
       // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (only when no native login)
-      const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
+      const sandboxEnv = ' -e "IS_SANDBOX=1"';
       const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
       const oauthTokenEnv = oauthTokenValue ? ` -e "CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}"` : '';
       execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv}${oauthTokenEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
