@@ -398,25 +398,17 @@ function isClaudeLoggedIn() {
 }
 
 /**
- * Pre-approve an API key in ~/.claude.json so Claude Code skips
- * the interactive "Detected a custom API key" confirmation prompt.
- * Also marks onboarding as complete to prevent the login screen
- * from blocking prompt processing on fresh installs.
+ * Ensure ~/.claude.json has onboarding and workspace trust pre-accepted.
+ * Without this, Claude shows interactive onboarding/login/trust prompts
+ * in the tmux session, blocking automated startup.
+ * Must be called for ALL auth methods, not just API key.
  */
-function approveApiKey(apiKey) {
+function ensureOnboardingComplete() {
   const claudeJsonPath = path.join(os.homedir(), '.claude.json');
   try {
     let config = {};
     try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
-    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
     let changed = false;
-    // Claude Code stores last 20 chars of the key for matching
-    const keySuffix = apiKey.slice(-20);
-    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
-      config.customApiKeyResponses.approved.push(keySuffix);
-      changed = true;
-    }
     if (!config.hasCompletedOnboarding) {
       config.hasCompletedOnboarding = true;
       try {
@@ -438,7 +430,29 @@ function approveApiKey(apiKey) {
     }
     if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (API key approval + onboarding + trust)`);
+      log(`Guardian: Updated ~/.claude.json (onboarding + trust)`);
+    }
+  } catch (err) {
+    log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
+  }
+}
+
+/**
+ * Pre-approve an API key in ~/.claude.json so Claude Code skips
+ * the interactive "Detected a custom API key" confirmation prompt.
+ */
+function approveApiKey(apiKey) {
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
+    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
+    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    const keySuffix = apiKey.slice(-20);
+    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
+      config.customApiKeyResponses.approved.push(keySuffix);
+      fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+      log(`Guardian: Pre-approved API key in ~/.claude.json`);
     }
   } catch (err) {
     log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
@@ -446,11 +460,29 @@ function approveApiKey(apiKey) {
 }
 
 function startClaude() {
-  // Check credentials.json once and reuse throughout — avoids redundant file I/O
-  // since isClaudeLoggedIn() also calls hasCredentialsFile() internally.
+  // Detect native `claude login` auth (credentials.json on Linux, system Keychain
+  // on macOS).  When native auth is active, .env tokens MUST NOT be injected into
+  // tmux — Claude CLI errors with "Auth conflict" if it sees both a native login
+  // and ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the environment.
   const useCredentialsFile = hasCredentialsFile();
+  let hasNativeAuth = useCredentialsFile;
+  let authStatusLoggedIn = false;
+  if (!hasNativeAuth) {
+    try {
+      const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
+        encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
+      });
+      const status = JSON.parse(output);
+      authStatusLoggedIn = status?.loggedIn === true;
+      hasNativeAuth = authStatusLoggedIn && status?.authMethod === 'claude.ai';
+    } catch (e) {
+      log(`Guardian: claude auth status check failed: ${e.message}`);
+    }
+  }
 
-  if (!useCredentialsFile && !isClaudeLoggedIn()) {
+  // Use cached auth status to avoid a redundant `claude auth status` subprocess
+  // inside isClaudeLoggedIn() — the same command was already run above.
+  if (!hasNativeAuth && !authStatusLoggedIn && !isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
     return;
   }
@@ -477,33 +509,36 @@ function startClaude() {
   } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
-  // When credentials.json is available, also strip CLAUDE_CODE_OAUTH_TOKEN from the
-  // environment. This covers the sendToTmux path where the existing tmux session may
-  // have the static token from a previous new-session -e injection.
-  const oauthStripFlag = useCredentialsFile ? ' -u CLAUDE_CODE_OAUTH_TOKEN' : '';
-  const claudeCmd = `${ENV_CLEAN_PREFIX}${oauthStripFlag} ${CLAUDE_BIN}${bypassFlag}`;
+  // When native auth is active, strip .env tokens from the environment to prevent
+  // "Auth conflict" errors. This covers the sendToTmux path where the existing tmux
+  // session may have tokens from a previous new-session -e injection.
+  const envStripFlags = hasNativeAuth
+    ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
+    : '';
+  const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
   const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
-  // Read auth credentials from .env
+  // Read auth credentials from .env — only when there is no native `claude login`.
+  // Native auth takes priority; injecting .env tokens alongside it causes conflicts.
   let apiKeyValue = '';
   let oauthTokenValue = '';
-  try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    if (apiMatch) apiKeyValue = apiMatch[1].trim();
-    // Skip .env OAUTH_TOKEN when credentials.json is available — credentials.json
-    // supports automatic token refresh, while .env tokens are static and expire.
-    if (!useCredentialsFile) {
+  if (!hasNativeAuth) {
+    try {
+      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+      const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+      if (apiMatch) apiKeyValue = apiMatch[1].trim();
       const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
       if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
-    }
-  } catch {}
-
-  if (useCredentialsFile) {
-    log('Guardian: Using ~/.claude/.credentials.json (auto-refresh) — skipping .env OAUTH_TOKEN');
+    } catch {}
   }
 
-  // Pre-approve credentials in ~/.claude.json so Claude skips interactive prompts
+  if (hasNativeAuth) {
+    log(`Guardian: Using native claude login auth${useCredentialsFile ? ' (credentials.json)' : ' (system keychain)'} — skipping .env tokens`);
+  }
+
+  // Pre-accept onboarding + trust dialogs for ALL auth methods — without this,
+  // Claude shows interactive prompts in tmux and blocks automated startup.
+  ensureOnboardingComplete();
   if (apiKeyValue) approveApiKey(apiKeyValue);
   if (oauthTokenValue) approveApiKey(oauthTokenValue);
 
@@ -515,8 +550,8 @@ function startClaude() {
       // -e flags pass env vars to tmux session:
       // - PATH: ensures Claude is found even if tmux server has different env
       // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
-      // - ANTHROPIC_API_KEY: for API key auth (read from .env)
-      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (read from .env, skipped when credentials.json exists)
+      // - ANTHROPIC_API_KEY: for API key auth (only when no native login)
+      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (only when no native login)
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
       const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
       const oauthTokenEnv = oauthTokenValue ? ` -e "CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}"` : '';
