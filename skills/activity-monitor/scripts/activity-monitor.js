@@ -1285,7 +1285,9 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
 
   // Start the check: send /usage to Claude
   log('Usage monitor: initiating /usage check');
-  sendTmuxKeys('"/usage" Enter');
+  sendTmuxKeys('"/usage"');
+  execSync('sleep 0.3');
+  sendTmuxKeys('Enter');
   usageCheckPhase = 'sent';
 }
 
