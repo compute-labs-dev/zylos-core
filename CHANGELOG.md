@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-03-04
+
+### Fixed
+- **Guardian: prefer credentials.json over .env OAUTH_TOKEN** — when `~/.claude/.credentials.json` exists with a valid refresh token, Guardian now skips the static `CLAUDE_CODE_OAUTH_TOKEN` from `.env`, preventing 401 errors caused by expired static tokens overriding auto-refreshable OAuth credentials. All three auth methods (claude login, setup token, API key) continue to work correctly. (#215, closes #211)
+
 ## [0.3.0] - 2026-03-04
 
 ### Added
