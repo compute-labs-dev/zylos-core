@@ -7,6 +7,8 @@
  *   - startClaude(): skip .env OAUTH_TOKEN injection when credentials.json is available
  *   - isClaudeLoggedIn(): check credentials.json first, before falling back to .env
  *   - Prevents 401 errors caused by expired static tokens overriding auto-refreshable ones
+ *   - Extract ensureOnboardingComplete() from approveApiKey() so onboarding/trust dialogs
+ *     are pre-accepted for ALL auth methods, including credentials.json-only installs
  *
  * v15 changes (Intl.DateTimeFormat memory leak fix):
  *   - Hoist Intl.DateTimeFormat instances to module level (reuse instead of per-call new)
@@ -398,25 +400,16 @@ function isClaudeLoggedIn() {
 }
 
 /**
- * Pre-approve an API key in ~/.claude.json so Claude Code skips
- * the interactive "Detected a custom API key" confirmation prompt.
- * Also marks onboarding as complete to prevent the login screen
- * from blocking prompt processing on fresh installs.
+ * Ensure ~/.claude.json has onboarding and workspace trust pre-accepted.
+ * Without this, Claude shows interactive onboarding/login/trust prompts
+ * in the tmux session, blocking automated startup.
  */
-function approveApiKey(apiKey) {
+function ensureOnboardingComplete() {
   const claudeJsonPath = path.join(os.homedir(), '.claude.json');
   try {
     let config = {};
     try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
-    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
     let changed = false;
-    // Claude Code stores last 20 chars of the key for matching
-    const keySuffix = apiKey.slice(-20);
-    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
-      config.customApiKeyResponses.approved.push(keySuffix);
-      changed = true;
-    }
     if (!config.hasCompletedOnboarding) {
       config.hasCompletedOnboarding = true;
       try {
@@ -438,7 +431,30 @@ function approveApiKey(apiKey) {
     }
     if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (API key approval + onboarding + trust)`);
+      log(`Guardian: Updated ~/.claude.json (onboarding + trust)`);
+    }
+  } catch (err) {
+    log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
+  }
+}
+
+/**
+ * Pre-approve an API key in ~/.claude.json so Claude Code skips
+ * the interactive "Detected a custom API key" confirmation prompt.
+ */
+function approveApiKey(apiKey) {
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
+    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
+    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    // Claude Code stores last 20 chars of the key for matching
+    const keySuffix = apiKey.slice(-20);
+    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
+      config.customApiKeyResponses.approved.push(keySuffix);
+      fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+      log(`Guardian: Updated ~/.claude.json (API key approval)`);
     }
   } catch (err) {
     log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
@@ -503,7 +519,9 @@ function startClaude() {
     log('Guardian: Using ~/.claude/.credentials.json (auto-refresh) — skipping .env OAUTH_TOKEN');
   }
 
-  // Pre-approve credentials in ~/.claude.json so Claude skips interactive prompts
+  // Ensure onboarding and trust dialogs are pre-accepted for all auth methods.
+  // Without this, Claude shows interactive prompts in tmux and blocks startup.
+  ensureOnboardingComplete();
   if (apiKeyValue) approveApiKey(apiKeyValue);
   if (oauthTokenValue) approveApiKey(oauthTokenValue);
 
