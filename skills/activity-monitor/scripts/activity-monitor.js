@@ -149,13 +149,13 @@ function readConfigInt(key, fallback) {
   return fallback;
 }
 
-const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 1800);     // seconds between checks (default 30 min)
+const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 3600);     // seconds between checks (default 1 hour)
 const USAGE_IDLE_GATE = readConfigInt('usage_idle_gate', 30);                 // idle seconds required (default 30)
-const USAGE_CAPTURE_WAIT = readConfigInt('usage_capture_wait', 3);            // seconds to wait for UI render
-const USAGE_WARN_THRESHOLD = readConfigInt('usage_warn_threshold', 70);       // weekly % → warning
-const USAGE_HIGH_THRESHOLD = readConfigInt('usage_high_threshold', 85);       // weekly % → high alert
+const USAGE_CAPTURE_WAIT = readConfigInt('usage_capture_wait', 5);            // seconds to wait for UI render
+const USAGE_WARN_THRESHOLD = readConfigInt('usage_warn_threshold', 80);       // weekly % → warning
+const USAGE_HIGH_THRESHOLD = readConfigInt('usage_high_threshold', 90);       // weekly % → high alert
 const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); // weekly % → critical alert
-const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 7200);   // seconds between same-tier notifications
+const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 14400);  // seconds between same-tier notifications (4 hours)
 const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
 const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
 
