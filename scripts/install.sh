@@ -99,8 +99,7 @@ if [ -z "$BRANCH" ]; then
   if [ -n "$LATEST_TAG" ]; then
     BRANCH="$LATEST_TAG"
   else
-    warn "Could not resolve latest release (GitHub API may be rate-limited). Falling back to main branch."
-    BRANCH="main"
+    fail "Could not resolve latest release. GitHub API may be rate-limited or unreachable. Retry later or use: --branch main"
   fi
 fi
 
