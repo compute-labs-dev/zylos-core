@@ -141,19 +141,38 @@ export function switchProtocol(domain, protocol) {
 /**
  * Find the closing `}` of the first (primary) server block in a Caddyfile.
  * Tracks brace depth starting from the first `{` to find its matching `}`.
+ * Skips comment lines and Caddy global options blocks (label-less `{` at top).
  * Returns the character index of the closing brace, or -1 if not found.
  */
 function findPrimaryBlockEnd(content) {
   let depth = 0;
   let inBlock = false;
+  let skippingGlobal = false;
 
   for (let i = 0; i < content.length; i++) {
+    // Skip comment lines (# to end of line)
+    if (content[i] === '#') {
+      while (i < content.length && content[i] !== '\n') i++;
+      continue;
+    }
+
     if (content[i] === '{') {
       depth++;
-      inBlock = true;
+      if (!inBlock && !skippingGlobal) {
+        // Check if this is a global options block: no site address before {
+        const lineStart = content.lastIndexOf('\n', i) + 1;
+        const before = content.slice(lineStart, i).trim();
+        if (before === '' && depth === 1) {
+          skippingGlobal = true;
+        } else {
+          inBlock = true;
+        }
+      }
     } else if (content[i] === '}') {
       depth--;
-      if (inBlock && depth === 0) {
+      if (skippingGlobal && depth === 0) {
+        skippingGlobal = false;
+      } else if (inBlock && depth === 0) {
         return i;
       }
     }
