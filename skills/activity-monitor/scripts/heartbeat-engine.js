@@ -264,12 +264,6 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Don't kill+restart in rate_limited state — restarting can't fix rate limits
-    if (this.healthState === 'rate_limited') {
-      this.deps.log(`Heartbeat recovery skipped in RATE_LIMITED state (${reason})`);
-      return;
-    }
-
     const now = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'ok') {
@@ -294,14 +288,6 @@ export class HeartbeatEngine {
     const phase = pending.phase || 'primary';
     const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
-
-    // Rate-limit recovery heartbeat failed — rate limit likely still active.
-    // Re-enter rate_limited with a shorter retry (60s).
-    if (this.healthState === 'rate_limited') {
-      this.cooldownUntil = now + 60;
-      this.deps.log(`Rate-limit recovery heartbeat failed (${status}), retrying in 60s`);
-      return;
-    }
 
     // In ok state, any failure triggers recovery directly (no verify phase).
     // The verify phase was removed in v2 — stuck detection provides the
