@@ -5,6 +5,15 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-03-06
+
+### Added
+- **User message triggers recovery in all unavailable states**: user messages now trigger recovery attempts in `recovering` and `down` states (not just `rate_limited`). Recovery cooldown reduced from 5 minutes to 1 minute. Error messages are honest about the bot's actual state instead of always claiming "rate limited" (#254)
+
+### Fixed
+- **False positive rate limit detection**: replaced aggressive tick-level tmux text scanning with dual-signal detection — rate limit is now only detected when both heartbeat failure AND specific rate-limit text are present in the tmux pane. Prevents conversation content containing "rate limit" keywords from triggering false positives. Includes 71 tests (#257, closes #256)
+- **Rate-limited recovery deadlock**: `triggerRecovery` was blocked by a `rate_limited` guard that prevented recovery even when cooldown expired. Recovery now correctly proceeds after cooldown (#253)
+
 ## [0.3.4] - 2026-03-05
 
 ### Added
