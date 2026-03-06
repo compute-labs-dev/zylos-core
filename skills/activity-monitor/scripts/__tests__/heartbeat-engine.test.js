@@ -706,7 +706,7 @@ describe('HeartbeatEngine', () => {
       assert.equal(calls.killTmuxSession, 0);
     });
 
-    it('restarts Claude and sends heartbeat when cooldown expires', () => {
+    it('kills tmux and transitions to recovering when cooldown expires', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
@@ -714,18 +714,8 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, 2001);
 
       assert.equal(calls.killTmuxSession, 1);
-      assert.deepEqual(calls.enqueueHeartbeat, ['rate-limit-recovery']);
-    });
-
-    it('pushes cooldown forward if heartbeat enqueue fails on cooldown expiry', () => {
-      const { deps } = createMockDeps();
-      deps.enqueueHeartbeat = () => false;
-      const engine = new HeartbeatEngine(deps);
-
-      engine.enterRateLimited(2000, '7am');
-      engine.processHeartbeat(true, 2001);
-
-      assert.equal(engine.cooldownUntil, 2001 + 60);
+      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.cooldownUntil, 0);
     });
 
     it('recovers to ok on heartbeat success after rate limit', () => {
@@ -743,21 +733,18 @@ describe('HeartbeatEngine', () => {
       assert.equal(calls.notifyPendingChannels, 1);
     });
 
-    it('retries in 60s on heartbeat failure while rate_limited', () => {
+    it('stays rate_limited when heartbeat fails (no kill)', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
       engine.enterRateLimited(2000, '7am');
-      deps._pending = { control_id: 1, phase: 'rate-limit-recovery', created_at: 2000 };
+      deps._pending = { control_id: 1, phase: 'recovery', created_at: 2000 };
       deps._heartbeatStatus = 'failed';
-      const beforeNow = Math.floor(Date.now() / 1000);
       engine.processHeartbeat(true, 2005);
 
       assert.equal(engine.health, 'rate_limited');
-      // cooldownUntil should be ~now + 60 (uses Date.now() internally)
-      assert.ok(engine.cooldownUntil >= beforeNow + 60);
-      assert.ok(engine.cooldownUntil <= beforeNow + 62);
-      assert.ok(calls.log.some(m => m.includes('Rate-limit recovery heartbeat failed')));
+      assert.equal(calls.killTmuxSession, 0);
+      assert.ok(calls.log.some(m => m.includes('skipped in RATE_LIMITED')));
     });
 
     it('triggerRecovery is skipped in rate_limited state', () => {
@@ -855,6 +842,76 @@ describe('HeartbeatEngine', () => {
       const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
 
       assert.equal(engine.health, 'rate_limited');
+    });
+  });
+
+  describe('behavioral rate limit detection (dual-signal)', () => {
+    it('enters rate_limited when heartbeat fails and detectRateLimit returns detected', () => {
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: true, cooldownUntil: 5000, resetTime: '7am' });
+      deps._pending = { control_id: 1, phase: 'primary', created_at: 1000 };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.cooldownUntil, 5000);
+      assert.equal(engine.rateLimitResetTime, '7am');
+      assert.equal(calls.killTmuxSession, 0); // no kill — rate limited, not recovery
+    });
+
+    it('triggers normal recovery when heartbeat fails and detectRateLimit returns not detected', () => {
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: false });
+      deps._pending = { control_id: 1, phase: 'primary', created_at: 1000 };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 1);
+    });
+
+    it('checks rate limit on recovering heartbeat failure too', () => {
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: true, cooldownUntil: 6000, resetTime: '8am' });
+      deps._pending = { control_id: 1, phase: 'recovery', created_at: 1000 };
+      deps._heartbeatStatus = 'failed';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.cooldownUntil, 6000);
+    });
+
+    it('does not check rate limit when detectRateLimit dep is not provided', () => {
+      const { deps, calls } = createMockDeps();
+      // No detectRateLimit dep — should proceed with normal recovery
+      deps._pending = { control_id: 1, phase: 'primary', created_at: 1000 };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 1);
+    });
+
+    it('does not check rate limit in down state', () => {
+      let detectCalled = false;
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => { detectCalled = true; return { detected: true, cooldownUntil: 5000 }; };
+      deps._pending = { control_id: 1, phase: 'down-check', created_at: 1000 };
+      deps._heartbeatStatus = 'failed';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(detectCalled, false);
+      assert.equal(engine.health, 'down');
     });
   });
 });

@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v19 - Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v20 - Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v20 changes (behavioral rate limit detection — #255):
+ *   - Rate-limit detection moved from proactive tmux scan to heartbeat failure callback
+ *   - Dual-signal: heartbeat must fail (behavioral) AND tmux must show rate-limit text
+ *   - Eliminates false positives from conversation content containing "rate limit"
+ *   - Removed overly broad /rate limit/i pattern
  *
  * v19 changes (RATE_LIMITED state + user message triggered recovery — #233):
- *   - Rate-limit detection: scan tmux pane content for rate-limit keywords
  *   - New RATE_LIMITED health state: no kill+restart, waits for cooldown
  *   - Parse reset time from rate-limit prompt (e.g., "resets 7am")
  *   - User message triggered recovery: incoming message during rate_limited
@@ -1136,11 +1141,12 @@ function detectRateLimit() {
   const pane = captureTmuxPane();
   if (!pane) return { detected: false };
 
-  // Match known rate-limit patterns from Claude Code
+  // Match known rate-limit patterns from Claude Code's UI.
+  // These are specific UI prompts — generic "/rate limit/i" was removed because
+  // it false-positives when Claude discusses rate limiting in conversation.
   const rateLimitPatterns = [
     /out of extra usage/i,
     /you['']re out of .* usage/i,
-    /rate limit/i,
     /usage limit reached/i,
     /you['']ve hit your limit/i
   ];
@@ -1577,14 +1583,9 @@ function monitorLoop() {
     }
   }
 
-  // Rate-limit detection: check tmux pane for rate-limit signals before
-  // stuck detection triggers a futile recovery cycle.
-  if (engine.health === 'ok' || engine.health === 'recovering') {
-    const rateLimit = detectRateLimit();
-    if (rateLimit.detected) {
-      engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
-    }
-  }
+  // Rate-limit detection is now handled inside HeartbeatEngine.onHeartbeatFailure
+  // via the detectRateLimit dep callback (dual-signal: heartbeat failure + tmux text).
+  // This eliminates false positives from conversation content matching rate-limit patterns.
 
   // User message triggered recovery: when a user sends a message while unavailable,
   // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
@@ -1639,7 +1640,8 @@ function init() {
     clearHeartbeatPending,
     killTmuxSession,
     notifyPendingChannels,
-    log
+    log,
+    detectRateLimit
   }, {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
