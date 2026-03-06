@@ -2,7 +2,7 @@
 /**
  * Activity Monitor v20 - Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
  *
- * v20 changes (behavioral rate limit detection — #255):
+ * v20 changes (behavioral rate limit detection — #256):
  *   - Rate-limit detection moved from proactive tmux scan to heartbeat failure callback
  *   - Dual-signal: heartbeat must fail (behavioral) AND tmux must show rate-limit text
  *   - Eliminates false positives from conversation content containing "rate limit"

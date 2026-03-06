@@ -1,7 +1,7 @@
 /**
  * HeartbeatEngine - Heartbeat liveness state machine.
  *
- * v4 changes (#255 — behavioral rate limit detection):
+ * v4 changes (#256 — behavioral rate limit detection):
  *   - Rate limit detection moved from proactive tmux scan to heartbeat failure
  *   - deps.detectRateLimit callback: called on heartbeat failure before triggering
  *     kill+restart recovery. If rate limit detected → enter rate_limited instead.
