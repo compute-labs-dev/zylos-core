@@ -1,6 +1,12 @@
 /**
  * HeartbeatEngine - Heartbeat liveness state machine.
  *
+ * v4 changes (#256 — behavioral rate limit detection):
+ *   - Rate limit detection moved from proactive tmux scan to heartbeat failure
+ *   - deps.detectRateLimit callback: called on heartbeat failure before triggering
+ *     kill+restart recovery. If rate limit detected → enter rate_limited instead.
+ *   - Eliminates false positives from conversation content matching "rate limit"
+ *
  * v3 changes (#233 — RATE_LIMITED state + user message triggered recovery):
  *   - New RATE_LIMITED health state: no kill+restart, waits for cooldown
  *   - enterRateLimited(cooldownUntil, resetTime): called by activity-monitor
@@ -32,6 +38,7 @@ export class HeartbeatEngine {
    * @param {() => void} deps.killTmuxSession
    * @param {() => void} deps.notifyPendingChannels
    * @param {(message: string) => void} deps.log
+   * @param {() => {detected: boolean, cooldownUntil?: number, resetTime?: string}} [deps.detectRateLimit]
    * @param {object} [options]
    * @param {number} [options.heartbeatInterval=1800]
    * @param {number} [options.downDegradeThreshold=3600] - Seconds of continuous failure before entering DOWN
@@ -285,6 +292,11 @@ export class HeartbeatEngine {
       return;
     }
 
+    if (this.healthState === 'rate_limited') {
+      this.deps.log(`Heartbeat recovery skipped in RATE_LIMITED state (${reason})`);
+      return;
+    }
+
     const now = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'ok') {
@@ -309,6 +321,18 @@ export class HeartbeatEngine {
     const phase = pending.phase || 'primary';
     const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
+
+    // Before triggering kill+restart recovery, check if the failure is due to
+    // a rate limit. This is the "behavioral + text" dual-signal approach:
+    // heartbeat failed (behavioral) AND tmux shows rate limit text (text signal).
+    // Only checked in ok/recovering states where we'd otherwise kill the session.
+    if ((this.healthState === 'ok' || this.healthState === 'recovering') && this.deps.detectRateLimit) {
+      const rateLimit = this.deps.detectRateLimit();
+      if (rateLimit.detected) {
+        this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
+        return;
+      }
+    }
 
     // In ok state, any failure triggers recovery directly (no verify phase).
     // The verify phase was removed in v2 — stuck detection provides the
