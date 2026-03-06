@@ -1586,9 +1586,9 @@ function monitorLoop() {
     }
   }
 
-  // User message triggered recovery: when a user sends a message during rate_limited,
-  // c4-receive writes a signal file. Read and consume it to trigger early recovery.
-  if (engine.health === 'rate_limited') {
+  // User message triggered recovery: when a user sends a message while unavailable,
+  // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
+  if (engine.health !== 'ok') {
     try {
       if (fs.existsSync(USER_MESSAGE_SIGNAL_FILE)) {
         const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
