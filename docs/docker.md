@@ -15,8 +15,8 @@ git clone https://github.com/zylos-ai/zylos-core.git
 cd zylos-core
 
 # 2. Set your auth token (choose one)
-export ANTHROPIC_API_KEY=sk-ant-xxx
-# or: export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx
+# or: export ANTHROPIC_API_KEY=sk-ant-xxx
 
 # 3. Start (pulls image if available, or builds locally)
 docker compose up -d --build
@@ -70,8 +70,8 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key (usage-based billing) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code token (Pro/Max subscription) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (usage-based billing) |
 
 ### Optional
 
