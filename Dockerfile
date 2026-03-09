@@ -10,7 +10,7 @@
 # receive heartbeat / message commands through the c4-dispatcher bridge.
 # ────────────────────────────────────────────────────────────────────────────
 
-FROM node:20-slim
+FROM node:22-slim
 
 LABEL org.opencontainers.image.source="https://github.com/zylos-ai/zylos-core"
 LABEL org.opencontainers.image.description="Zylos — autonomous AI agent infrastructure"
