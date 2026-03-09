@@ -5,6 +5,23 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-03-09
+
+### Added
+- **Interactive CLI mode (`zylos shell`)**: minimal-dependency REPL that communicates with Claude via C4 — the simplest way to talk to your agent (#278)
+- **Docker deployment**: full Docker support with Dockerfile, docker-compose.yml, entrypoint script, and deployment guide. Supports OAuth tokens and API keys, persistent volumes, Telegram/Lark channel passthrough, and Synology NAS (#276)
+- **Docker image auto-publish to GHCR**: CI workflow builds and pushes multi-platform images (amd64 + arm64) on push to main (`:main` tag) and on version tags (`:x.y.z` + `:latest`) (#283)
+- **Friendly Docker startup progress**: entrypoint now shows step-by-step progress (Step 1/4 ~ 4/4) with color-coded output, version banner, and web console URL on completion (#285)
+- **Pre-uninstall lifecycle hook**: components can define a `pre-uninstall` script in their registry entry, executed before removal (#284)
+- **SSH install method for unsupported platforms**: documented how to install Zylos on Windows/NAS via `claude --ssh` (#275)
+
+### Fixed
+- **Docker stop hangs**: rewrote entrypoint shutdown logic — sleep loop replaces `wait` on child PID, allowing SIGTERM trap to fire reliably (#282)
+
+### Documentation
+- Web console password retrieval guide for Docker (#286)
+- `zylos shell` added as primary interaction method in README (EN + CN) and Docker docs (#287)
+
 ## [0.3.5] - 2026-03-06
 
 ### Added
