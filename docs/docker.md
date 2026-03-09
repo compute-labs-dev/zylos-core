@@ -25,6 +25,8 @@ docker compose up -d
 docker compose logs -f
 ```
 
+That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`) and start the PM2 service stack automatically. No need to copy `.env` files — the entrypoint handles everything.
+
 ### Building locally
 
 If no pre-built image is available, or you want to build from source:
@@ -32,8 +34,6 @@ If no pre-built image is available, or you want to build from source:
 ```bash
 docker compose up -d --build
 ```
-
-That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`) and start the PM2 service stack automatically. No need to copy `.env` files — the entrypoint handles everything.
 
 ## How It Works
 

@@ -57,7 +57,7 @@ upsert_env() {
   if grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
     return  # already exists — don't overwrite
   fi
-  echo "${key}=${value}" >> "${ENV_FILE}"
+  echo "${key}=${value}" >> "${ENV_FILE}" 2>/dev/null || true
 }
 
 upsert_env "TELEGRAM_BOT_TOKEN" "${TELEGRAM_BOT_TOKEN:-}"

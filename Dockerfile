@@ -31,10 +31,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Global npm tools ──────────────────────────────────────────────────────────
 RUN npm install -g pm2@latest
 
-# ── Install Claude Code CLI ───────────────────────────────────────────────────
-# Installs to ~/.local/bin/claude (Node.js-based CLI)
-RUN npm install -g @anthropic-ai/claude-code
-
 # ── Create zylos user (non-root) ──────────────────────────────────────────────
 RUN useradd -m -s /bin/bash zylos \
     && mkdir -p /home/zylos/.local/bin /home/zylos/.npm-global \
