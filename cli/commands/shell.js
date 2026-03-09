@@ -37,6 +37,7 @@ export async function shellCommand() {
   const server = net.createServer((conn) => {
     let data = '';
     conn.setEncoding('utf8');
+    conn.on('error', () => {}); // ignore client disconnect errors
     conn.on('data', (chunk) => { data += chunk; });
     conn.on('end', () => {
       if (data && pendingResolve) {
