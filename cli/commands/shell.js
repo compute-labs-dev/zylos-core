@@ -19,7 +19,10 @@ const C4_RECEIVE = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scr
 export async function shellCommand() {
   const socketPath = path.join(os.tmpdir(), `zylos-shell-${process.pid}.sock`);
 
-  // Clean up stale socket file
+  // Clean up stale socket files from previous sessions (e.g. kill -9)
+  cleanStaleSockets();
+
+  // Clean up own socket file if it exists
   try { fs.unlinkSync(socketPath); } catch {}
 
   // Verify c4-receive exists
@@ -46,13 +49,23 @@ export async function shellCommand() {
     });
   });
 
+  // Set umask before listen to create socket with correct permissions (owner-only)
+  const oldMask = process.umask(0o177);
   server.listen(socketPath, () => {
-    // Ensure socket is only accessible by current user
-    try { fs.chmodSync(socketPath, 0o600); } catch {}
+    process.umask(oldMask);
   });
 
-  // Cleanup on exit
+  server.on('error', (err) => {
+    process.umask(oldMask);
+    console.error(`Error: could not start shell server — ${err.message}`);
+    process.exit(1);
+  });
+
+  // Cleanup on exit (guard against double invocation)
+  let cleaned = false;
   function cleanup() {
+    if (cleaned) return;
+    cleaned = true;
     server.close();
     try { fs.unlinkSync(socketPath); } catch {}
   }
@@ -128,12 +141,20 @@ export async function shellCommand() {
     try {
       const response = await waitForResponse(120000);
       // Clear "thinking..." and print response
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
+      if (process.stdout.isTTY) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+      } else {
+        process.stdout.write('\n');
+      }
       console.log(formatResponse(response));
     } catch {
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
+      if (process.stdout.isTTY) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+      } else {
+        process.stdout.write('\n');
+      }
       console.log(dim('  (no response within timeout — message is queued, check back later)'));
     }
 
@@ -148,6 +169,11 @@ export async function shellCommand() {
 
   function waitForResponse(timeoutMs) {
     return new Promise((resolve, reject) => {
+      // Reject any previously pending promise to avoid memory leaks
+      if (pendingResolve) {
+        pendingResolve = null;
+      }
+
       const timer = setTimeout(() => {
         pendingResolve = null;
         reject(new Error('timeout'));
@@ -163,6 +189,25 @@ export async function shellCommand() {
 
 function formatResponse(text) {
   return `${bold('zylos>')} ${text}`;
+}
+
+function cleanStaleSockets() {
+  const tmpDir = os.tmpdir();
+  try {
+    const files = fs.readdirSync(tmpDir);
+    for (const file of files) {
+      const match = file.match(/^zylos-shell-(\d+)\.sock$/);
+      if (!match) continue;
+      const pid = Number(match[1]);
+      // Check if the process is still running
+      try {
+        process.kill(pid, 0);
+      } catch {
+        // Process doesn't exist — clean up stale socket
+        try { fs.unlinkSync(path.join(tmpDir, file)); } catch {}
+      }
+    }
+  } catch {}
 }
 
 function printHelp() {

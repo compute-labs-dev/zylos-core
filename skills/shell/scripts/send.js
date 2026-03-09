@@ -11,7 +11,7 @@ import net from 'node:net';
 const socketPath = process.argv[2];
 const message = process.argv[3];
 
-if (!socketPath || !message) {
+if (!socketPath || process.argv.length < 4) {
   console.error('Usage: node send.js <socket_path> <message>');
   process.exit(1);
 }
