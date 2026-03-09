@@ -43,15 +43,16 @@ docker container: zylos
 
 ## Persistent Data
 
-Three named volumes are created automatically:
+Four named volumes are created automatically:
 
 | Volume | Mounted at | Contents |
 |---|---|---|
-| `zylos-memory` | `~/zylos/memory/` | Agent memory files (daily notes, MEMORY.md) |
+| `zylos-memory` | `~/zylos/memory/` | Agent memory files (identity, state, sessions) |
 | `zylos-workspace` | `~/zylos/workspace/` | Files created/edited by the AI |
 | `zylos-logs` | `~/zylos/logs/` | PM2 service logs |
+| `claude-config` | `~/.claude/` | Claude Code settings and auth tokens |
 
-> ⚠️ **Back up `zylos-memory`**. It contains the agent's long-term memory and daily notes. Loss = amnesia.
+> **Back up `zylos-memory`**. It contains the agent's long-term memory. Loss = amnesia.
 
 ## Environment Variables
 
@@ -73,6 +74,7 @@ All variables can be set in `docker-compose.yml` or via an `.env` file in the pr
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
 | `ZYLOS_WEB_PASSWORD` | — | Web console password |
+| `WEB_CONSOLE_BIND` | `0.0.0.0` | Web console bind address (set automatically in Docker) |
 | `WEB_CONSOLE_PORT` | `3456` | Host port for web console |
 | `HTTP_PORT` | `8080` | Host port for Caddy proxy |
 

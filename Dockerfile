@@ -10,7 +10,7 @@
 # receive heartbeat / message commands through the c4-dispatcher bridge.
 # ────────────────────────────────────────────────────────────────────────────
 
-FROM node:24-slim
+FROM node:20-slim
 
 LABEL org.opencontainers.image.source="https://github.com/zylos-ai/zylos-core"
 LABEL org.opencontainers.image.description="Zylos — autonomous AI agent infrastructure"
@@ -36,13 +36,18 @@ RUN npm install -g pm2@latest
 RUN npm install -g @anthropic-ai/claude-code
 
 # ── Create zylos user (non-root) ──────────────────────────────────────────────
-RUN useradd -m -s /bin/bash zylos
+RUN useradd -m -s /bin/bash zylos \
+    && mkdir -p /home/zylos/.local/bin /home/zylos/.npm-global \
+    && chown -R zylos:zylos /home/zylos
 USER zylos
 ENV HOME=/home/zylos
+ENV NPM_CONFIG_PREFIX=/home/zylos/.npm-global
+ENV PATH="/home/zylos/.npm-global/bin:/home/zylos/.local/bin:${PATH}"
 
 # ── Install zylos-core ────────────────────────────────────────────────────────
 WORKDIR /home/zylos
-RUN npm install -g zylos
+RUN npm install -g --install-links https://github.com/zylos-ai/zylos-core \
+    && zylos --version
 
 # ── Workspace directories ─────────────────────────────────────────────────────
 # These directories will be mounted as volumes in docker-compose.yml.

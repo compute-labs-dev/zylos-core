@@ -40,6 +40,7 @@ ${LARK_APP_ID:+LARK_APP_ID=${LARK_APP_ID}}
 ${LARK_APP_SECRET:+LARK_APP_SECRET=${LARK_APP_SECRET}}
 
 # Web console
+WEB_CONSOLE_BIND=${WEB_CONSOLE_BIND:-0.0.0.0}
 ${ZYLOS_WEB_PASSWORD:+ZYLOS_WEB_PASSWORD=${ZYLOS_WEB_PASSWORD}}
 
 # System PATH hint (helps PM2 find claude and node)
@@ -65,9 +66,10 @@ if [ ! -f "${INIT_MARKER}" ]; then
   info "First run — initialising zylos workspace..."
   zylos init \
     --yes \
-    --no-interactive \
     ${ZYLOS_TIMEZONE:+--timezone "${ZYLOS_TIMEZONE}"} \
-    || true   # init may prompt; best-effort
+    ${ANTHROPIC_API_KEY:+--api-key "${ANTHROPIC_API_KEY}"} \
+    ${CLAUDE_CODE_OAUTH_TOKEN:+--setup-token "${CLAUDE_CODE_OAUTH_TOKEN}"} \
+    || true   # init may fail partially; best-effort
   touch "${INIT_MARKER}"
   info "Workspace initialised."
 fi
