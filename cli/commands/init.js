@@ -1329,16 +1329,53 @@ function setCaddyCapabilities() {
 }
 
 /**
+ * Default HTTP port for local address mode (high port, no setcap needed).
+ */
+const LOCAL_HTTP_PORT = 3800;
+
+/**
+ * Check if a domain/address is a local or private address.
+ * @param {string} addr - Domain or IP address
+ * @returns {boolean}
+ */
+export function isLocalAddress(addr) {
+  const a = addr.trim().toLowerCase();
+  if (a === 'localhost' || a === 'localhost.') return true;
+  // 0.0.0.0 (bind-all, not routable)
+  if (a === '0.0.0.0') return true;
+  // 127.x.x.x loopback
+  if (/^127\./.test(a)) return true;
+  // Private IPv4 ranges
+  if (/^10\./.test(a)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true;
+  if (/^192\.168\./.test(a)) return true;
+  // IPv6 loopback
+  if (a === '::1') return true;
+  // IPv4-mapped IPv6 loopback
+  if (a === '::ffff:127.0.0.1') return true;
+  // IPv6 link-local (fe80::) and unique local (fc00::/7 → fc00:: and fd00::)
+  if (/^fe80:/i.test(a) || /^f[cd][0-9a-f]{2}:/i.test(a)) return true;
+  return false;
+}
+
+/**
  * Generate a Caddyfile for the given domain and protocol.
  * @param {string} domain - The domain name
  * @param {string} [protocol='https'] - 'https' (bare domain, auto-cert) or 'http'
+ * @param {number} [port] - Optional port override (used for local addresses)
  */
-function generateCaddyfile(domain, protocol = 'https') {
+function generateCaddyfile(domain, protocol = 'https', port) {
   const publicDir = path.join(HTTP_DIR, 'public');
   fs.mkdirSync(publicDir, { recursive: true });
 
   // Caddy syntax: bare domain = HTTPS + auto-cert, http:// prefix = HTTP only
-  const siteAddress = protocol === 'http' ? `http://${domain}` : domain;
+  // For local addresses, bind to a specific port to avoid occupying 80/443
+  let siteAddress;
+  if (port != null) {
+    siteAddress = `http://${domain}:${port}`;
+  } else {
+    siteAddress = protocol === 'http' ? `http://${domain}` : domain;
+  }
 
   const content = `# Zylos Caddyfile — managed by zylos-core
 # Domain: ${domain}
@@ -1419,7 +1456,10 @@ async function setupCaddy(skipConfirm, opts = {}) {
   let domain = opts.domain || config.domain || '';
   if (!domain || domain === 'your.domain.com') {
     if (!skipConfirm) {
-      domain = await prompt('Enter your domain (e.g., zylos.example.com): ');
+      domain = await prompt(
+        'Enter your domain for HTTPS access (e.g., zylos.example.com),\n'
+        + '  or leave empty for local-only access: '
+      );
     }
     if (!domain) {
       if (opts.caddy === true) {
@@ -1434,32 +1474,51 @@ async function setupCaddy(skipConfirm, opts = {}) {
     }
   }
 
+  // Detect local addresses: localhost, 127.x.x.x, private IPs
+  const isLocal = isLocalAddress(domain);
+
   // Resolve protocol: CLI/env > existing config > prompt > default
   let protocol;
-  if (opts.https === true) protocol = 'https';
-  else if (opts.https === false) protocol = 'http';
-  else protocol = config.protocol || '';
+  let localPort;
+  if (isLocal) {
+    // Local addresses: force HTTP on a high port, skip HTTPS prompt
+    protocol = 'http';
+    localPort = LOCAL_HTTP_PORT;
+    if (!quiet) console.log(`  ${dim(`Local address detected — using HTTP on port ${LOCAL_HTTP_PORT} (no HTTPS certificate needed).`)}`);
+  } else {
+    if (opts.https === true) protocol = 'https';
+    else if (opts.https === false) protocol = 'http';
+    else protocol = config.protocol || '';
 
-  if (!protocol && !skipConfirm) {
-    const useHttps = await promptYesNo('Use HTTPS with auto-certificate? [Y/n]: ', true);
-    protocol = useHttps ? 'https' : 'http';
+    if (!protocol && !skipConfirm) {
+      const useHttps = await promptYesNo('Use HTTPS with auto-certificate? [Y/n]: ', true);
+      protocol = useHttps ? 'https' : 'http';
+    }
+    if (!protocol) protocol = 'https';
   }
-  if (!protocol) protocol = 'https';
 
   // Save domain and protocol to config.json
-  updateZylosConfig({ domain, protocol });
-  if (!quiet) console.log(`  ${dim('Domain:')} ${bold(domain)}`);
-  if (!quiet) console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
+  updateZylosConfig({ domain, protocol, ...(localPort != null ? { port: localPort } : {}) });
+  if (!quiet) {
+    if (localPort) {
+      console.log(`  ${dim('Address:')} ${bold(`http://${domain}:${localPort}`)}`);
+    } else {
+      console.log(`  ${dim('Domain:')} ${bold(domain)}`);
+      console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
+    }
+  }
 
   // Download Caddy binary
   if (!downloadCaddy()) return false;
 
-  // Set capabilities for port binding
-  setCaddyCapabilities();
+  // Set capabilities for port binding (only needed for ports < 1024)
+  if (!localPort) {
+    setCaddyCapabilities();
+  }
 
   // Generate Caddyfile
   fs.mkdirSync(HTTP_DIR, { recursive: true });
-  generateCaddyfile(domain, protocol);
+  generateCaddyfile(domain, protocol, localPort);
   if (!quiet) console.log(`  ${success('Caddyfile generated at ~/zylos/http/Caddyfile')}`);
 
   return true;
