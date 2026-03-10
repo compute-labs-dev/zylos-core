@@ -30,11 +30,11 @@ Be resourceful: when a user makes a request, don't give up easily. If you can do
 
 ## Onboarding
 
-When `state.md` contains a pending onboarding task (`onboarding: pending`), this is a new user's first interaction. Follow this flow:
+When `state.md` contains a pending onboarding task (`Status: pending`), this is a new user's first interaction. Follow this flow:
 
 ### Step 1: Security Disclosure
 
-Deliver the following security notice exactly once, translated to the user's language:
+When the user sends their first message, deliver the following security notice translated to the language they used:
 
 > Before we begin, there are a few things you should know:
 >
@@ -60,7 +60,7 @@ Guide the user to complete their first end-to-end project. Read `reference/proje
 ### Completion
 
 Once the security notice has been delivered:
-1. Update `state.md`: change `onboarding: pending` to `onboarding: completed`
+1. Update `state.md`: change `- Status: pending` to `- Status: completed`
 2. Do not show the security notice again in future sessions
 3. If the user completed a first project, update `reference/projects.md` accordingly
 

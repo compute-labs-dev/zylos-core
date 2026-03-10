@@ -6,7 +6,7 @@ Last updated: (not yet)
 Fresh installation. Onboarding pending.
 
 ## Onboarding
-onboarding: pending
+- Status: pending
 
 ## Pending Tasks
 - [ ] Complete onboarding — deliver security notice and guide owner through first project (see CLAUDE.md > Onboarding)

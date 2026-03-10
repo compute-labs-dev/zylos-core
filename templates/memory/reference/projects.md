@@ -11,7 +11,7 @@ See zylos-memory skill `references/projects-format.md` for entry format.
 - **Updated:** (not yet)
 - **Description:** Help the owner complete their first end-to-end project with Zylos. The goal is to produce something immediately useful — a working product, not a demo.
 - **Importance:** 1
-- **Type:** factual
+- **Type:** onboarding
 
 #### Suggested Task Types
 
