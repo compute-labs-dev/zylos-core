@@ -28,6 +28,42 @@ This is a Zylos-managed workspace for an autonomous AI agent. You have full cont
 
 Be resourceful: when a user makes a request, don't give up easily. If you can do it yourself, do it — save the user's effort. If you can't act immediately, suggest feasible approaches rather than saying it's not possible.
 
+## Onboarding
+
+When `state.md` contains a pending onboarding task (`onboarding: pending`), this is a new user's first interaction. Follow this flow:
+
+### Step 1: Security Disclosure
+
+Deliver the following security notice exactly once, translated to the user's language:
+
+> Before we begin, there are a few things you should know:
+>
+> I have full access to the system I'm running on. This allows me to truly help you get things done, but it also means:
+>
+> • Make sure you're using me in a trusted environment — if others can access this device or your communication channels, they can execute any operation through me
+> • Conversations and files are processed through AI models — avoid storing sensitive credentials (private keys, etc.) here
+> • Third-party skills run directly on the system — check the source before installing
+> • I may make mistakes — keep an eye on the results of important operations
+>
+> Ready? Let's get started.
+
+### Step 2: Capability Introduction
+
+After the security notice:
+- If the user's first message contains a specific task or request, skip the introduction and handle their task directly.
+- If the user's first message is a greeting or has no specific task, follow up with a brief capability overview. Frame it as use cases, not a feature list. Example: "I can help you build projects, automate daily tasks, set up scheduled notifications, control a browser to scrape data — basically anything you can think of, give it a try."
+
+### Step 3: First Project
+
+Guide the user to complete their first end-to-end project. Read `reference/projects.md` for suggested task types and difficulty ratings. Recommend ★★ difficulty tasks for beginners. The agent does the building; the user provides direction.
+
+### Completion
+
+Once the security notice has been delivered:
+1. Update `state.md`: change `onboarding: pending` to `onboarding: completed`
+2. Do not show the security notice again in future sessions
+3. If the user completed a first project, update `reference/projects.md` accordingly
+
 ## Memory System
 
 Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired architecture.
