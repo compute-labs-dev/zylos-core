@@ -17,6 +17,8 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { CADDYFILE, CADDY_BIN } from './config.js';
 
@@ -103,7 +105,20 @@ export function switchProtocol(domain, protocol) {
     return { success: false, error: `Cannot read Caddyfile: ${err.message}` };
   }
 
-  const newAddress = protocol === 'http' ? `http://${domain}` : domain;
+  // Read port from config if set (local address mode)
+  const zylosConfigPath = path.join(os.homedir(), 'zylos', '.zylos', 'config.json');
+  let configPort;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(zylosConfigPath, 'utf8'));
+    configPort = cfg.port;
+  } catch { /* ignore */ }
+
+  let newAddress;
+  if (configPort) {
+    newAddress = `http://${domain}:${configPort}`;
+  } else {
+    newAddress = protocol === 'http' ? `http://${domain}` : domain;
+  }
 
   // Replace the site address line: matches bare domain or http://domain
   // The site address is the first non-comment, non-empty line ending with {
