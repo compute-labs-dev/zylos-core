@@ -131,7 +131,7 @@ if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
 fi
 
 tmux new-session -d -s claude-main -x 220 -y 50 \
-  "cd ${HOME} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
+  "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
 
 ok "Claude Code session started"
 
