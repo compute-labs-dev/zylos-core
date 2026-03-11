@@ -1819,8 +1819,8 @@ export async function initCommand(args) {
       console.log('  execute commands, read/write files, and access the network');
       console.log('  on your behalf.');
       console.log('');
-      console.log(yellow('  If untrusted people can reach this machine or talk to the'));
-      console.log(yellow('  bot, they can execute anything. This is dangerous.'));
+      console.log(yellow('  ⚠ It is dangerous if untrusted people can reach this'));
+      console.log(yellow('  machine or talk to the bot — they can execute anything.'));
       console.log('');
       console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
