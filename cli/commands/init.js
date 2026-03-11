@@ -1805,6 +1805,27 @@ export async function initCommand(args) {
     console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
   }
 
+  // Security consent — first-time install only, skip on re-init and silent mode
+  if (!skipConfirm && detectInstallState() !== 'complete') {
+    if (!quiet) {
+      console.log(yellow('  Security Notice\n'));
+      console.log(dim('  Zylos runs with full access to this system — it can execute commands,'));
+      console.log(dim('  read/write files, and access network resources as the current user.\n'));
+      console.log(dim('  • Use in a trusted environment — anyone with access to your device'));
+      console.log(dim('    or communication channels can execute operations through the bot'));
+      console.log(dim('  • Avoid storing sensitive credentials in conversations or files'));
+      console.log(dim('    processed by AI models'));
+      console.log(dim('  • Review third-party skills before installing — they run directly'));
+      console.log(dim('    on the system\n'));
+    }
+    const accepted = await promptYesNo('  Continue with installation? [Y/n]: ', true);
+    if (!accepted) {
+      console.log(`\n${dim('Installation cancelled.')}`);
+      process.exit(0);
+    }
+    if (!quiet) console.log('');
+  }
+
   // Step 1: Check prerequisites (always, even on re-init)
   if (!quiet) console.log(heading('Checking prerequisites...'));
 
