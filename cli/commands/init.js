@@ -1819,9 +1819,9 @@ export async function initCommand(args) {
       console.log(`  ${dim('│')}  ${dim('user — it can execute commands, read/write')}          ${dim('│')}`);
       console.log(`  ${dim('│')}  ${dim('files, and access the network on your behalf.')}      ${dim('│')}`);
       console.log(dim('  │                                                        │'));
-      console.log(`  ${dim('│')}  ${yellow('⚠ It is dangerous if untrusted people can')}          ${dim('│')}`);
-      console.log(`  ${dim('│')}  ${yellow('reach this machine or talk to the bot —')}             ${dim('│')}`);
-      console.log(`  ${dim('│')}  ${yellow('they can execute anything.')}                          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('⚠ Dangerous: If untrusted people can reach')}         ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('this machine or talk to the bot, they can')}          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('execute anything as your user.')}                     ${dim('│')}`);
       console.log(dim('  │                                                        │'));
       console.log(dim('  └────────────────────────────────────────────────────────┘'));
       console.log('');
