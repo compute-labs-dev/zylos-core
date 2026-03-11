@@ -1250,7 +1250,9 @@ function warnIfForeignCgroup() {
 
     // PM2 daemon is in a foreign cgroup — warn
     // Extract the service name from the cgroup path for a clear message
-    const serviceMatch = cgroup.match(/\/([^/]+\.service)$/);
+    // cgroup v2: single line "0::/system.slice/foo.service"
+    // cgroup v1: multiple lines "12:pids:/system.slice/foo.service\n..."
+    const serviceMatch = cgroup.match(/\/([^/\n]+\.service)/);
     const foreignService = serviceMatch ? serviceMatch[1] : null;
 
     if (foreignService) {
