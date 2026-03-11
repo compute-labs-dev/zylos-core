@@ -79,10 +79,11 @@ if [ -t 1 ]; then
   YELLOW='\033[1;33m'
   CYAN='\033[0;36m'
   BCYAN='\033[1;36m'
+  DIM='\033[2m'
   BOLD='\033[1m'
   NC='\033[0m'
 else
-  RED='' GREEN='' YELLOW='' CYAN='' BCYAN='' BOLD='' NC=''
+  RED='' GREEN='' YELLOW='' CYAN='' BCYAN='' DIM='' BOLD='' NC=''
 fi
 
 info()  { printf "${CYAN}[zylos]${NC} %s\n" "$*"; }
@@ -355,20 +356,27 @@ _has_yes_flag() {
 
 if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
   echo ""
-  printf '%b' "${YELLOW}"
-  echo "  Security Notice"
+  printf '%b' "${YELLOW}${BOLD}"
+  echo "  ◆ Security Notice"
+  printf '%b' "${NC}${DIM}"
+  echo "  ──────────────────────────────────────────────────────────"
   printf '%b' "${NC}"
   echo ""
-  printf '%b' "${CYAN}"
-  echo "  Zylos runs with full access to this system — it can execute commands,"
-  echo "  read/write files, and access network resources as the current user."
+  echo "  Zylos runs with full access to this system — it can execute"
+  echo "  commands, read/write files, and access network resources as"
+  echo "  the current user."
   echo ""
-  echo "  • Use in a trusted environment — anyone with access to your device"
-  echo "    or communication channels can execute operations through the bot"
-  echo "  • Avoid storing sensitive credentials in conversations or files"
-  echo "    processed by AI models"
-  echo "  • Review third-party skills before installing — they run directly"
-  echo "    on the system"
+  printf '%b' "${CYAN}"
+  echo "  •  Use in a trusted environment — anyone with access to your"
+  echo "     device or channels can execute operations through the bot"
+  echo "  •  Avoid storing sensitive credentials in conversations or"
+  echo "     files processed by AI models"
+  echo "  •  Review third-party skills before installing — they run"
+  echo "     directly on the system"
+  printf '%b' "${NC}"
+  echo ""
+  printf '%b' "${DIM}"
+  echo "  ──────────────────────────────────────────────────────────"
   printf '%b' "${NC}"
   echo ""
   printf '%b' "${BOLD}"

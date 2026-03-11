@@ -1811,15 +1811,22 @@ export async function initCommand(args) {
   // or when already accepted in install.sh (--skip-consent)
   if (!skipConfirm && !opts.skipConsent && detectInstallState() !== 'complete') {
     if (!quiet) {
-      console.log(yellow('  Security Notice\n'));
-      console.log(dim('  Zylos runs with full access to this system — it can execute commands,'));
-      console.log(dim('  read/write files, and access network resources as the current user.\n'));
-      console.log(dim('  • Use in a trusted environment — anyone with access to your device'));
-      console.log(dim('    or communication channels can execute operations through the bot'));
-      console.log(dim('  • Avoid storing sensitive credentials in conversations or files'));
-      console.log(dim('    processed by AI models'));
-      console.log(dim('  • Review third-party skills before installing — they run directly'));
-      console.log(dim('    on the system\n'));
+      console.log(yellow(bold('  ◆ Security Notice')));
+      console.log(dim('  ──────────────────────────────────────────────────────────'));
+      console.log('');
+      console.log('  Zylos runs with full access to this system — it can execute');
+      console.log('  commands, read/write files, and access network resources as');
+      console.log('  the current user.');
+      console.log('');
+      console.log(cyan('  •  Use in a trusted environment — anyone with access to your'));
+      console.log(cyan('     device or channels can execute operations through the bot'));
+      console.log(cyan('  •  Avoid storing sensitive credentials in conversations or'));
+      console.log(cyan('     files processed by AI models'));
+      console.log(cyan('  •  Review third-party skills before installing — they run'));
+      console.log(cyan('     directly on the system'));
+      console.log('');
+      console.log(dim('  ──────────────────────────────────────────────────────────'));
+      console.log('');
     }
     const accepted = await promptYesNo('  I understand and want to continue [Y/n]: ', true);
     if (!accepted) {
