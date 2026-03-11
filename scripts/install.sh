@@ -362,7 +362,7 @@ if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
   echo "  ──────────────────────────────────────────────────────────"
   printf '%b' "${NC}"
   echo ""
-  echo "  Zylos is designed for trusted environments only. It runs"
+  echo "  Zylos currently expects a trusted environment. It runs"
   echo "  with full system access as the current user — it can"
   echo "  execute commands, read/write files, and access the network"
   echo "  on your behalf."

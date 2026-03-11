@@ -1814,7 +1814,7 @@ export async function initCommand(args) {
       console.log(yellow(bold('  ◆ Security Notice')));
       console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
-      console.log('  Zylos is designed for trusted environments only. It runs');
+      console.log('  Zylos currently expects a trusted environment. It runs');
       console.log('  with full system access as the current user — it can');
       console.log('  execute commands, read/write files, and access the network');
       console.log('  on your behalf.');
