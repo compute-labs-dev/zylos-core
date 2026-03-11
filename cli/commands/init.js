@@ -1193,6 +1193,7 @@ function setupPm2Startup() {
     });
     if (sudoResult.status === 0) {
       console.log(`  ${success('PM2 boot auto-start configured')}`);
+      warnIfForeignCgroup();
     } else {
       console.log(`  ${warn('PM2 boot auto-start: sudo password incorrect')}`);
       console.log(`    This is optional — Zylos works fine without it.`);
@@ -1209,6 +1210,58 @@ function setupPm2Startup() {
     const msg = output.trim().split('\n')[0] || 'unknown error';
     console.log(`  ${warn(`PM2 boot auto-start setup failed: ${msg}`)}`);
     console.log(`    ${dim('Fix manually: pm2 startup (then run the sudo command it outputs)')}`);
+    return;
+  }
+
+  // Check if PM2 daemon is running in a foreign cgroup (Linux only).
+  // When zylos init runs inside a systemd service (e.g., a bootstrap service),
+  // the PM2 daemon inherits that service's cgroup. If that service is later
+  // restarted, systemd kills all processes in its cgroup — including PM2.
+  // The pm2 startup unit only takes effect on the next boot, so warn the user.
+  warnIfForeignCgroup();
+}
+
+/**
+ * Warn if the PM2 daemon is running inside another service's cgroup.
+ * This happens when zylos init is called from a systemd service — PM2
+ * inherits the caller's cgroup instead of running under pm2-<user>.service.
+ */
+function warnIfForeignCgroup() {
+  if (process.platform !== 'linux') return;
+
+  try {
+    const pidFile = path.join(os.homedir(), '.pm2', 'pm2.pid');
+    if (!fs.existsSync(pidFile)) return;
+    const pm2Pid = fs.readFileSync(pidFile, 'utf8').trim();
+    if (!pm2Pid) return;
+
+    const cgroupPath = `/proc/${pm2Pid}/cgroup`;
+    if (!fs.existsSync(cgroupPath)) return;
+    const cgroup = fs.readFileSync(cgroupPath, 'utf8').trim();
+
+    const user = os.userInfo().username;
+    const expectedUnit = `pm2-${user}.service`;
+
+    // If PM2 is in its own systemd unit or in user scope, it's fine
+    if (cgroup.includes(expectedUnit)) return;
+
+    // If running in a Docker container (no systemd), skip
+    if (fs.existsSync('/.dockerenv')) return;
+
+    // PM2 daemon is in a foreign cgroup — warn
+    // Extract the service name from the cgroup path for a clear message
+    const serviceMatch = cgroup.match(/\/([^/]+\.service)$/);
+    const foreignService = serviceMatch ? serviceMatch[1] : null;
+
+    if (foreignService) {
+      console.log(`  ${warn(`PM2 daemon is running inside ${bold(foreignService)}'s cgroup.`)}`);
+    } else {
+      console.log(`  ${warn('PM2 daemon is not running under its own systemd unit.')}`);
+    }
+    console.log(`    If ${foreignService || 'that service'} is restarted, PM2 will be killed.`);
+    console.log(`    ${cyan('Reboot to let PM2 start under')} ${bold(expectedUnit)}.`);
+  } catch {
+    // Best-effort check — don't fail init if we can't read cgroup info
   }
 }
 
