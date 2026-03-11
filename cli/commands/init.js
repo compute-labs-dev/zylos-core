@@ -1814,13 +1814,13 @@ export async function initCommand(args) {
       console.log(yellow(bold('  ◆ Security Notice')));
       console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
-      console.log('  Zylos currently expects a trusted environment. It runs');
+      console.log('  Zylos currently assumes a trusted environment. It runs');
       console.log('  with full system access as the current user — it can');
       console.log('  execute commands, read/write files, and access the network');
       console.log('  on your behalf.');
       console.log('');
       console.log(yellow('  If untrusted people can reach this machine or talk to the'));
-      console.log(yellow('  bot, they can execute anything.'));
+      console.log(yellow('  bot, they can execute anything. This is dangerous.'));
       console.log('');
       console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
