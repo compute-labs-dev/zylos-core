@@ -1593,6 +1593,7 @@ function parseInitFlags(args) {
     yes: false,
     quiet: false,
     help: false,
+    skipConsent: false,
     timezone: null,
     setupToken: null,
     apiKey: null,
@@ -1640,6 +1641,7 @@ function parseInitFlags(args) {
       case '--no-https': opts.https = false; break;
       case '--caddy': opts.caddy = true; break;
       case '--no-caddy': opts.caddy = false; break;
+      case '--skip-consent': opts.skipConsent = true; break;
     }
   }
 
@@ -1805,8 +1807,9 @@ export async function initCommand(args) {
     console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
   }
 
-  // Security consent — first-time install only, skip on re-init and silent mode
-  if (!skipConfirm && detectInstallState() !== 'complete') {
+  // Security consent — first-time install only, skip on re-init, silent mode,
+  // or when already accepted in install.sh (--skip-consent)
+  if (!skipConfirm && !opts.skipConsent && detectInstallState() !== 'complete') {
     if (!quiet) {
       console.log(yellow('  Security Notice\n'));
       console.log(dim('  Zylos runs with full access to this system — it can execute commands,'));
@@ -1818,10 +1821,10 @@ export async function initCommand(args) {
       console.log(dim('  • Review third-party skills before installing — they run directly'));
       console.log(dim('    on the system\n'));
     }
-    const accepted = await promptYesNo('  Continue with installation? [Y/n]: ', true);
+    const accepted = await promptYesNo('  I understand and want to continue [Y/n]: ', true);
     if (!accepted) {
-      console.log(`\n${dim('Installation cancelled.')}`);
-      process.exit(0);
+      console.log(`\n${dim('Installation cancelled. No changes were made.')}`);
+      process.exit(130); // 130 = user cancellation (same as Ctrl+C convention)
     }
     if (!quiet) console.log('');
   }

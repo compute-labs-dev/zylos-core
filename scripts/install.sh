@@ -343,6 +343,56 @@ if [ "$BRANCH" != "main" ]; then
   info "Branch: ${BRANCH}"
 fi
 
+# ── Security Consent ─────────────────────────────────────────
+# Show security notice before installing anything. Skip in non-interactive
+# mode (-y) or when stdin is not a terminal (piped without /dev/tty).
+_has_yes_flag() {
+  for arg in "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}"; do
+    case "$arg" in -y|--yes|-yq|-qy|-yqh|-qyh|-hyq|-hqy|-yhq|-qhy) return 0 ;; esac
+  done
+  return 1
+}
+
+if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
+  echo ""
+  printf '%b' "${YELLOW}"
+  echo "  Security Notice"
+  printf '%b' "${NC}"
+  echo ""
+  printf '%b' "${CYAN}"
+  echo "  Zylos runs with full access to this system — it can execute commands,"
+  echo "  read/write files, and access network resources as the current user."
+  echo ""
+  echo "  • Use in a trusted environment — anyone with access to your device"
+  echo "    or communication channels can execute operations through the bot"
+  echo "  • Avoid storing sensitive credentials in conversations or files"
+  echo "    processed by AI models"
+  echo "  • Review third-party skills before installing — they run directly"
+  echo "    on the system"
+  printf '%b' "${NC}"
+  echo ""
+  printf '%b' "${BOLD}"
+  printf "  I understand and want to continue [Y/n]: "
+  printf '%b' "${NC}"
+  if [ -e /dev/tty ]; then
+    read -r answer < /dev/tty
+  else
+    read -r answer
+  fi
+  case "${answer:-Y}" in
+    [Yy]*|"")
+      # User accepted — tell zylos init to skip its own consent prompt
+      INIT_ARGS+=("--skip-consent")
+      ;;
+    *)
+      echo ""
+      info "Installation cancelled. No changes were made."
+      echo ""
+      exit 0
+      ;;
+  esac
+fi
+
 echo ""
 info "Checking prerequisites..."
 echo ""
@@ -420,13 +470,18 @@ else
   # Always run zylos init after installation (environment is ready at this point).
   info "Running zylos init..."
   echo ""
+  local init_exit=0
   if [ -e /dev/tty ]; then
-    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty || init_exit=$?
   else
-    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} || init_exit=$?
   fi
 
-  _show_source_hint
+  if [ "$init_exit" -eq 0 ]; then
+    _show_source_hint
+  else
+    echo ""
+  fi
 fi
 
 } # end of _main — do not remove (partial download guard)
