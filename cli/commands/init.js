@@ -1822,6 +1822,9 @@ export async function initCommand(args) {
       console.log(yellow('  ⚠ It is dangerous if untrusted people can reach this'));
       console.log(yellow('  machine or talk to the bot — they can execute anything.'));
       console.log('');
+      console.log('  Only continue if you understand the risks and trust');
+      console.log('  the environment you are installing on.');
+      console.log('');
       console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
     }
