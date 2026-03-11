@@ -79,24 +79,34 @@ function main(raw) {
   const state = loadState();
   if (state && (now - state.last_trigger_at) < COOLDOWN_SECONDS) return;
 
-  // Save state FIRST to prevent re-triggering
-  saveState({
-    ...state,
-    last_trigger_at: now,
-    used_percentage: usedPct,
-  });
+  // Enqueue new-session control message with bypass_state so dispatcher
+  // delivers it even when health !== 'ok' (fixes #274: context rotation deadlock)
+  const MAX_RETRIES = 3;
+  let enqueued = false;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      execFileSync('node', [C4_CONTROL, 'enqueue',
+        '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Use the new-session skill to start a fresh session.`,
+        '--priority', '1',
+        '--bypass-state',
+        '--ack-deadline', '300'
+      ], { encoding: 'utf8', stdio: 'pipe' });
 
-  // Enqueue new-session control message
-  try {
-    execFileSync('node', [C4_CONTROL, 'enqueue',
-      '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Use the new-session skill to start a fresh session.`,
-      '--priority', '1',
-      '--ack-deadline', '300'
-    ], { encoding: 'utf8', stdio: 'pipe' });
+      enqueued = true;
+      log(`Triggered new-session: context at ${usedPct}%`);
+      break;
+    } catch (err) {
+      log(`Failed to enqueue new-session (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
+    }
+  }
 
-    log(`Triggered new-session: context at ${usedPct}%`);
-  } catch (err) {
-    log(`Failed to enqueue new-session: ${err.message}`);
+  // Only update cooldown after successful enqueue to avoid silent 5-min gap on failure
+  if (enqueued) {
+    saveState({
+      ...state,
+      last_trigger_at: now,
+      used_percentage: usedPct,
+    });
   }
 }
 
