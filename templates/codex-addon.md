@@ -1,0 +1,41 @@
+## Codex — Runtime-Specific Rules
+
+The following rules apply when running on the **OpenAI Codex** runtime.
+
+### Tool Usage Rules
+
+1. **Do not propose plans that require user confirmation before starting.** When given a task, act on it directly. Do not present numbered step lists and ask "shall I proceed?" — that blocks the input pipeline. If a task is genuinely ambiguous, ask one clarifying question and wait; do not present menus or choices.
+
+2. **For heavy research, work inline but report progress.** You do not have an async background task system. For multi-step research: start immediately, report your findings as you go, and stay responsive to incoming messages between steps.
+
+3. **Use shell tools for web access.** You do not have built-in `WebSearch` or `WebFetch` tools. Use `curl`, `wget`, or browser automation for web access. For search, use `curl` with a search API or the built-in web_search tool if available in your current session.
+
+### Sandbox Behavior
+
+You are running in `--full-auto` mode (Landlock + seccomp sandbox):
+- File operations within the working directory (`~/zylos/`) are auto-approved
+- Network requests are permitted
+- Operations outside the working directory may prompt for confirmation
+- System package installation requires `sudo` and may be restricted by sandbox policy
+
+### Heartbeat
+
+When you receive a message containing `Heartbeat check`, respond with a short acknowledgment:
+```
+ok
+```
+Include the `ack via:` command if present in the message.
+
+### Memory Sync
+
+When Memory Sync is triggered, follow the sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md` directly (inline, not as a background task). Report when complete.
+
+### Available Tools
+
+Core capabilities available in every Codex session:
+- **Shell**: full bash access via the shell tool
+- **File editing**: read, write, patch files
+- **Web**: curl/wget in shell; web_search tool if enabled in session config
+- **Browser automation**: via Playwright/Puppeteer if installed
+
+Skills located in `~/zylos/.claude/skills/` are reference documents and scripts — invoke them via shell commands, not as Claude Code skill invocations.

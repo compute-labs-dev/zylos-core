@@ -17,6 +17,7 @@ import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -870,12 +871,19 @@ function deployTemplates() {
   // Always save current shell PATH to .env (for PM2 services)
   saveSystemPath(envDest);
 
-  // CLAUDE.md — only create if missing
-  const claudeMdSrc = path.join(TEMPLATES_SRC, 'CLAUDE.md');
+  // ZYLOS.md — user-editable runtime-agnostic core; only create if missing
+  const zylosMdSrc = path.join(TEMPLATES_SRC, 'ZYLOS.md');
+  const zylosMdDest = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  if (fs.existsSync(zylosMdSrc) && !fs.existsSync(zylosMdDest)) {
+    fs.copyFileSync(zylosMdSrc, zylosMdDest);
+    console.log(`  ${success('Created ZYLOS.md from template')}`);
+  }
+
+  // CLAUDE.md — generated from ZYLOS.md + claude-addon.md; rebuild if missing
   const claudeMdDest = path.join(ZYLOS_DIR, 'CLAUDE.md');
-  if (fs.existsSync(claudeMdSrc) && !fs.existsSync(claudeMdDest)) {
-    fs.copyFileSync(claudeMdSrc, claudeMdDest);
-    console.log(`  ${success('Created CLAUDE.md from template')}`);
+  if (!fs.existsSync(claudeMdDest) && fs.existsSync(zylosMdSrc)) {
+    buildInstructionFile('claude');
+    console.log(`  ${success('Generated CLAUDE.md from template layers')}`);
   }
 
   // memory/ templates — only create missing files
