@@ -12,6 +12,7 @@
  */
 
 import { ClaudeAdapter } from './claude.js';
+import { CodexAdapter } from './codex.js';
 import { getZylosConfig } from '../config.js';
 
 // ── Runtime registry ──────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ import { getZylosConfig } from '../config.js';
  */
 const REGISTRY = {
   claude: ClaudeAdapter,
-  // codex: CodexAdapter,  // Phase 4
+  codex: CodexAdapter,
 };
 
 /**
