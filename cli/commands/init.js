@@ -17,7 +17,7 @@ import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -882,7 +882,7 @@ function deployTemplates() {
   // CLAUDE.md — generated from ZYLOS.md + claude-addon.md; rebuild if missing
   const claudeMdDest = path.join(ZYLOS_DIR, 'CLAUDE.md');
   if (!fs.existsSync(claudeMdDest) && fs.existsSync(zylosMdSrc)) {
-    buildInstructionFile('claude');
+    getActiveAdapter().buildInstructionFile();
     console.log(`  ${success('Generated CLAUDE.md from template layers')}`);
   }
 
