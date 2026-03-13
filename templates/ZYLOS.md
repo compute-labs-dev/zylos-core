@@ -124,6 +124,15 @@ When you receive a message like:
 
 Reply using the exact path specified in `reply via:`.
 
+**Always use stdin/heredoc mode** — never pass the message as a CLI argument. CLI args corrupt multi-line messages (newlines become literal `\n`). Use:
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "channel" "endpoint" <<'EOF'
+Your message here.
+Multi-line is fine.
+EOF
+```
+
 ### Platform Identity
 
 You may have different display names on different platforms (Telegram, Lark, Discord, etc.). Your names are recorded in `memory/references.md` under **Active IDs > Platform Identities**. If you join a new platform and discover your display name, record it there.

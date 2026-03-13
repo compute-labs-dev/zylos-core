@@ -7,10 +7,10 @@ The following rules apply when running on the **OpenAI Codex** runtime.
 When the user asks to switch to the Claude runtime:
 
 ```bash
-zylos init --runtime claude
+zylos runtime claude
 ```
 
-You can execute this yourself. It will reconfigure the system, rebuild instruction files, and restart PM2 services — your Codex session will be terminated and Claude will start. Confirm to the user before running (it's irreversible within the current session).
+You can execute this yourself. It checks Claude authentication, updates config, rebuilds instruction files, and restarts services — your Codex session will be terminated and Claude will start. Confirm to the user before running (it's irreversible within the current session).
 
 ### Tool Usage Rules
 

@@ -15,23 +15,13 @@ The following rules apply when running on the **Claude Code** runtime.
 
 ### Runtime Switching
 
-When the user asks to switch to the Codex runtime, **always verify Codex is authenticated first** before executing the switch:
+When the user asks to switch to the Codex runtime:
 
 ```bash
-# Step 1: check auth
-codex login status
-# or check if OPENAI_API_KEY / CODEX_API_KEY is set in ~/zylos/.env
+zylos runtime codex
 ```
 
-If Codex is **not** authenticated: tell the user to run `codex login` on the server and do NOT proceed with the switch — switching to an unauthenticated runtime leaves the system unreachable via IM.
-
-If Codex **is** authenticated, proceed:
-
-```bash
-zylos init --runtime codex
-```
-
-This reconfigures the system, rebuilds instruction files, and restarts PM2 services — your Claude Code session will be terminated and Codex will start.
+This command checks Codex authentication first and aborts if not authenticated (switching to an unauthenticated runtime leaves the system unreachable via IM). If authenticated, it updates config, rebuilds instruction files, and restarts services — your Claude Code session will be terminated and Codex will start.
 
 ### Heartbeat
 
