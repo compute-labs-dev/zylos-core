@@ -606,6 +606,25 @@ function approveApiKey(apiKey) {
  *
  * @param {string} apiKey - The API key
  */
+function saveCodexApiKeyToEnv(apiKey) {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    if (content.match(/^OPENAI_API_KEY=.*$/m)) {
+      content = content.replace(/^OPENAI_API_KEY=.*$/m, `OPENAI_API_KEY=${apiKey}`);
+    } else {
+      content = content.trimEnd() + `\n\n# OpenAI API key for Codex (set by zylos init)\nOPENAI_API_KEY=${apiKey}\n`;
+    }
+    fs.writeFileSync(envPath, content);
+    process.env.OPENAI_API_KEY = apiKey;
+    return true;
+  } catch (err) {
+    console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
+    return false;
+  }
+}
+
 function saveApiKeyToEnv(apiKey) {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
@@ -2088,12 +2107,55 @@ export async function initCommand(args) {
       } else {
         if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
         if (!skipConfirm) {
-          console.log(`\n  ${dim('Authenticate Codex by running one of:')}`);
-          console.log(`    ${bold('codex login')}                 ${dim('# browser-based')}`);
-          console.log(`    ${bold('codex login --device-auth')}   ${dim('# headless/server')}`);
-          console.log(`\n  ${dim('Then run "zylos init" again.')}`);
+          const codexAuthChoice = await promptChoice(
+            '\n  How would you like to authenticate Codex?',
+            ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
+          );
+          if (codexAuthChoice === 1) {
+            // Option 1: API key
+            console.log(`\n  ${dim('Paste your OpenAI API key (starts with sk-):')}`);
+            const apiKey = await promptSecret('  API key: ');
+            if (!apiKey) {
+              console.log(`  ${warn('No key entered. Skipped.')}`);
+            } else if (saveCodexApiKeyToEnv(apiKey)) {
+              codexAuthenticated = isCodexAuthenticated();
+              if (codexAuthenticated) {
+                console.log(`  ${success('Codex API key saved and verified')}`);
+              } else {
+                console.log(`  ${warn('Key saved but auth check failed. Continuing...')}`);
+              }
+            }
+          } else if (codexAuthChoice === 2) {
+            // Option 2: device-auth (headless)
+            console.log(`\n  ${cyan('Starting Codex device auth...')}`);
+            console.log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
+            try {
+              spawnSync('codex', ['login', '--device-auth'], { stdio: 'inherit' });
+            } catch { /* user may Ctrl+C */ }
+            codexAuthenticated = isCodexAuthenticated();
+            if (codexAuthenticated) {
+              console.log(`\n  ${success('Codex authenticated')}`);
+            } else {
+              console.log(`\n  ${warn('Authentication not completed.')}`);
+              console.log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
+            }
+          } else {
+            // Option 3: browser login
+            console.log(`\n  ${cyan('Starting Codex browser login...')}`);
+            console.log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
+            try {
+              spawnSync('codex', ['login'], { stdio: 'inherit' });
+            } catch { /* user may Ctrl+C */ }
+            codexAuthenticated = isCodexAuthenticated();
+            if (codexAuthenticated) {
+              console.log(`\n  ${success('Codex authenticated')}`);
+            } else {
+              console.log(`\n  ${warn('Authentication not completed.')}`);
+              console.log(`    ${dim('Run "codex login" to try again.')}`);
+            }
+          }
         } else {
-          if (!quiet) console.log(`    ${dim('Run "codex login" to authenticate.')}`);
+          if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
         }
       }
 
