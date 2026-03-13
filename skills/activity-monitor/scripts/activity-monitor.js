@@ -370,6 +370,13 @@ function startAgent() {
     waitForMaintenance();
   }
 
+  // Skip startup if not authenticated — avoids interactive login prompts in tmux
+  const authResult = adapter.checkAuth ? adapter.checkAuth() : { ok: true };
+  if (!authResult.ok) {
+    log(`Guardian: ${adapter.displayName} not authenticated (${authResult.reason ?? 'unknown'}), skipping startup`);
+    return;
+  }
+
   log(`Guardian: Starting ${adapter.displayName}...`);
 
   // Clear stale context temp files from a previous session

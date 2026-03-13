@@ -87,16 +87,18 @@ function migrateClaudeMdToZylosMd() {
     return false;
   }
 
-  // Prepare new CLAUDE.md content from templates
+  // Prepare new CLAUDE.md content: user's existing CLAUDE.md (which becomes ZYLOS.md)
+  // plus the Claude addon. Using the user's file as the base preserves customizations.
+  const userContent = fs.readFileSync(CLAUDE_MD, 'utf8');
   let newClaudeContent;
-  if (fs.existsSync(zylosMdTemplate) && fs.existsSync(claudeAddonTemplate)) {
-    newClaudeContent = fs.readFileSync(zylosMdTemplate, 'utf8').trimEnd()
+  if (fs.existsSync(claudeAddonTemplate)) {
+    newClaudeContent = userContent.trimEnd()
       + '\n\n'
       + fs.readFileSync(claudeAddonTemplate, 'utf8').trimEnd()
       + '\n';
   } else {
-    // Templates missing — keep old CLAUDE.md content in both files
-    newClaudeContent = fs.readFileSync(CLAUDE_MD, 'utf8');
+    // Addon template missing — keep old content unchanged in both files
+    newClaudeContent = userContent;
   }
 
   // Write new CLAUDE.md content to temp file

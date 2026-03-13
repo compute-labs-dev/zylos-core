@@ -2026,7 +2026,13 @@ export async function initCommand(args) {
       if (!quiet) console.log(`  ${error('Codex not found')}`);
       if (!quiet) console.log(`    ${cyan('Installing @openai/codex...')}`);
       if (installCodex()) {
-        if (!quiet) console.log(`  ${success('Codex installed')}`);
+        if (commandExists('codex')) {
+          if (!quiet) console.log(`  ${success('Codex installed')}`);
+        } else {
+          console.error(`  ${error('Codex installed but not found in PATH')}`);
+          console.error(`    ${dim('Ensure npm global bin is in PATH, then run zylos init again.')}`);
+          process.exit(1);
+        }
       } else {
         console.error(`  ${error('Failed to install Codex')}`);
         console.error(`    ${dim('Install manually: npm install -g @openai/codex')}`);
