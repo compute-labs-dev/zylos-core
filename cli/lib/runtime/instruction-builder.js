@@ -67,7 +67,18 @@ export function buildInstructionFile(runtime, opts = {}) {
   const core = fs.readFileSync(coreSrc, 'utf8');
   const addon = fs.readFileSync(addonSrc, 'utf8');
 
-  let content = core.trimEnd() + '\n\n' + addon.trimEnd() + '\n';
+  // If ZYLOS.md was converted from a legacy CLAUDE.md (migration marker present)
+  // and we're building AGENTS.md for Codex, prepend a plain-text warning that
+  // Codex can read. The migrated file may contain Claude-specific directives
+  // (EnterPlanMode, Task, WebFetch) that Codex cannot follow.
+  const MIGRATION_MARKER = '<!-- MIGRATION NOTE (zylos v0.4.0)';
+  const migrationWarning = (runtime === 'codex' && core.includes(MIGRATION_MARKER))
+    ? '> **MIGRATION WARNING**: This AGENTS.md was generated from a CLAUDE.md that' +
+      ' may contain Claude-only instructions. Review ~/zylos/ZYLOS.md and remove' +
+      ' any Claude-specific rules (e.g. EnterPlanMode, Task) before relying on this file.\n\n'
+    : '';
+
+  let content = migrationWarning + core.trimEnd() + '\n\n' + addon.trimEnd() + '\n';
 
   // memorySnapshot is codex-only: injected into AGENTS.md before launch so the
   // agent has memory context from the previous session.

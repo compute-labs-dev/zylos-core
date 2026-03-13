@@ -35,7 +35,7 @@ export async function selfUninstall(args) {
   console.log(`  2. Uninstall the ${cyan('zylos')} npm package`);
   console.log(`  3. Remove ${cyan('~/zylos/')} and clean shell PATH entries`);
   if (!force) {
-    console.log(`  4. Optionally remove PM2 and Claude CLI`);
+    console.log(`  4. Optionally remove PM2, Claude CLI, and/or Codex CLI`);
   }
   console.log();
   console.log(dim('This will NOT remove Node.js or nvm.'));
@@ -65,6 +65,7 @@ export async function selfUninstall(args) {
   // ── Phase 4: Optional cleanup (ask BEFORE removing ~/zylos/) ──
   let removePm2 = false;
   let removeClaude = false;
+  let removeCodex = false;
 
   if (!force) {
     console.log(heading('Optional cleanup'));
@@ -80,6 +81,12 @@ export async function selfUninstall(args) {
     if (commandExists('claude')) {
       removeClaude = await promptYesNo(
         `  Remove Claude CLI? ${dim('(npm uninstall -g + remove ~/.claude/)')} [y/N] `
+      );
+    }
+
+    if (commandExists('codex')) {
+      removeCodex = await promptYesNo(
+        `  Remove Codex CLI? ${dim('(npm uninstall -g @openai/codex + remove ~/.codex/)')} [y/N] `
       );
     }
     console.log();
@@ -119,6 +126,12 @@ export async function selfUninstall(args) {
     console.log(dim('Removing Claude CLI...'));
     uninstallClaudeCli();
     console.log(success('Claude CLI removed'));
+  }
+
+  if (removeCodex) {
+    console.log(dim('Removing Codex CLI...'));
+    uninstallCodexCli();
+    console.log(success('Codex CLI removed'));
   }
 
   // ── Done ─────────────────────────────────────────────
@@ -322,4 +335,14 @@ function uninstallClaudeCli() {
 
   const claudeDir = path.join(os.homedir(), '.claude');
   removeDirectory(claudeDir);
+}
+
+/**
+ * Remove Codex CLI and its config directory.
+ */
+function uninstallCodexCli() {
+  npmUninstallGlobal('@openai/codex');
+
+  const codexDir = path.join(os.homedir(), '.codex');
+  removeDirectory(codexDir);
 }
