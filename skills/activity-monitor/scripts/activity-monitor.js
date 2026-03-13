@@ -1344,6 +1344,11 @@ function init() {
         // Read core memory files first so the new session has continuity.
         try {
           const memorySnapshot = _readMemorySnapshot();
+          // Reset guardian counters before stopping so the guardian does not
+          // treat the intentional stop as a crash and launch a second session
+          // while adapter.launch() is still starting the new one.
+          startupGrace = 30;
+          notRunningCount = 0;
           adapter.stop();
           await new Promise(r => setTimeout(r, 2000));
           await adapter.launch({ memorySnapshot });

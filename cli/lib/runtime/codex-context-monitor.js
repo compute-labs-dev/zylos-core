@@ -39,6 +39,9 @@ export class CodexContextMonitor extends ContextMonitorBase {
   constructor(opts = {}) {
     super(opts);
     this._model = opts.model ?? null;
+    // Record start time so SQLite queries ignore threads from prior sessions.
+    // Threads updated before this timestamp belong to a previous Codex run.
+    this._startTime = Math.floor(Date.now() / 1000);
   }
 
   /**
@@ -115,8 +118,11 @@ export class CodexContextMonitor extends ContextMonitorBase {
    */
   _getActiveRolloutPath() {
     try {
+      // Filter to threads updated after this monitor instance started, so we
+      // never pick up a stale thread from a previous session after a restart.
       const sql = `SELECT rollout_path FROM threads
                    WHERE archived = 0
+                     AND updated_at >= ${this._startTime}
                    ORDER BY updated_at DESC
                    LIMIT 1;`;
       const out = execFileSync('sqlite3', [SQLITE_FILE, sql], {
@@ -135,8 +141,10 @@ export class CodexContextMonitor extends ContextMonitorBase {
    */
   _readFromSqlite() {
     try {
+      // Same start-time filter as _getActiveRolloutPath() — ignore stale threads.
       const sql = `SELECT tokens_used FROM threads
                    WHERE archived = 0
+                     AND updated_at >= ${this._startTime}
                    ORDER BY updated_at DESC
                    LIMIT 1;`;
       const out = execFileSync('sqlite3', [SQLITE_FILE, sql], {
