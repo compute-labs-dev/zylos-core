@@ -35,6 +35,7 @@ const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
 export class CodexAdapter extends RuntimeAdapter {
   get displayName() { return 'Codex'; }
+  get sessionName()  { return 'codex-main'; }
 
   // ── Instruction file ───────────────────────────────────────────────────────
 

@@ -43,6 +43,7 @@ const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json')
 
 export class ClaudeAdapter extends RuntimeAdapter {
   get displayName() { return 'Claude Code'; }
+  get sessionName()  { return 'claude-main'; }
 
   // ── Instruction file ───────────────────────────────────────────────────────
 
