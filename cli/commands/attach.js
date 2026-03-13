@@ -1,5 +1,5 @@
 /**
- * Attach to the Claude tmux session with a detach hint.
+ * Attach to the active runtime's tmux session with a detach hint.
  */
 
 import { execSync, execFileSync } from 'node:child_process';
