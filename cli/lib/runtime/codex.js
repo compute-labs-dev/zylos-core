@@ -35,6 +35,7 @@ const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
 export class CodexAdapter extends RuntimeAdapter {
   get displayName() { return 'Codex'; }
+  get runtimeId() { return 'codex'; }
   get sessionName()  { return 'codex-main'; }
 
   // ── Instruction file ───────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ export class CodexAdapter extends RuntimeAdapter {
   async isRunning() {
     if (!_tmuxHasSession()) return false;
 
-    const panePid = _getTmuxPanePid();
+    const panePid = parseInt(_getTmuxPanePid(), 10);
     if (!panePid) return false;
 
     // Check direct process name

@@ -343,7 +343,7 @@ function waitForMaintenance() {
 // installations that haven't received the new hook via `zylos init`.
 // Non-Claude runtimes don't use Claude settings.json hooks — always fall back to C4.
 function hasStartupHook() {
-  if (adapter.displayName !== 'Claude Code') return false;
+  if (adapter.runtimeId !== 'claude') return false;
   try {
     const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -669,7 +669,7 @@ function writeDailyUpgradeState(date) {
 
 function enqueueDailyUpgradeControl() {
   // Only applicable for Claude Code runtime — no equivalent upgrade skill for other runtimes.
-  if (adapter.displayName !== 'Claude Code') return false;
+  if (adapter.runtimeId !== 'claude') return false;
   const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
   const result = runC4Control([
     'enqueue',
@@ -911,7 +911,7 @@ function sendUsageNotification(message) {
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
   // /usage is a Claude Code-only slash command — skip for other runtimes
-  if (adapter.displayName !== 'Claude Code') return;
+  if (adapter.runtimeId !== 'claude') return;
 
   // Abort in-progress check if Claude becomes busy (e.g., message arrived
   // during the wait window). The /usage UI may be overlaid or dismissed —
@@ -1140,7 +1140,7 @@ async function monitorLoop() {
     }
   }
 
-  let activity = adapter.displayName === 'Claude Code' ? getConversationFileModTime() : null;
+  let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
   let source = 'conv_file';
 
   if (!activity) {
@@ -1380,7 +1380,7 @@ function init() {
   }
 
   if (initialHealth !== 'ok') {
-    log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
+    log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
   }
 }
 

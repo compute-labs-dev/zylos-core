@@ -43,6 +43,7 @@ const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json')
 
 export class ClaudeAdapter extends RuntimeAdapter {
   get displayName() { return 'Claude Code'; }
+  get runtimeId() { return 'claude'; }
   get sessionName()  { return 'claude-main'; }
 
   // ── Instruction file ───────────────────────────────────────────────────────
@@ -100,7 +101,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
   async isRunning() {
     if (!_tmuxHasSession()) return false;
 
-    const panePid = _getTmuxPanePid();
+    const panePid = parseInt(_getTmuxPanePid(), 10);
     if (!panePid) return false;
 
     // Check direct process name

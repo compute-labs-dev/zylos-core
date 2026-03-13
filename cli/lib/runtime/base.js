@@ -107,6 +107,17 @@ export class RuntimeAdapter {
   }
 
   /**
+   * Stable machine-readable runtime identifier (e.g. 'claude', 'codex').
+   * Used for equality checks — prefer this over displayName comparisons.
+   * Subclasses should override this.
+   *
+   * @returns {string}
+   */
+  get runtimeId() {
+    return this.constructor.name.toLowerCase();
+  }
+
+  /**
    * Name of the tmux session used by this runtime (e.g. 'claude-main', 'codex-main').
    * Used by activity-monitor.js for tmux helpers. Subclasses MUST override this.
    *

@@ -2331,6 +2331,7 @@ export async function initCommand(args) {
       const oldSession = existingRuntime === 'claude' ? 'claude-main' : 'codex-main';
       try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
       try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json')); } catch {}
+      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
     }
     if (!quiet) console.log(heading('Starting services...'));
     const servicesStarted = startCoreServices(opts.webPassword);
@@ -2436,6 +2437,7 @@ export async function initCommand(args) {
     const oldSession = existingRuntime === 'claude' ? 'claude-main' : 'codex-main';
     try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
     try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json')); } catch {}
+    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
   }
 
   // Step 11: Start services
