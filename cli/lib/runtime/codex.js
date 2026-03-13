@@ -200,10 +200,23 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (_tmuxHasSession()) {
-      // Existing session — send command via tmux
+      // Existing session — send command via tmux.
+      // Also inject API keys from .env so that sessions created before credentials
+      // were configured (e.g. on first boot before zylos init completes) can auth.
+      let envSnippet = '';
+      try {
+        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
+        const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
+        const parts = [];
+        if (openaiMatch) parts.push(`export OPENAI_API_KEY=${openaiMatch[1]}`);
+        if (codexApiMatch) parts.push(`export CODEX_API_KEY=${codexApiMatch[1]}`);
+        if (parts.length > 0) envSnippet = parts.join('; ') + '; ';
+      } catch { /* .env absent or no keys — rely on native login */ }
+
       const cmd = tmpPrompt
-        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+        ? `${envSnippet}cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
+        : `${envSnippet}cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New tmux session — inject API keys from ~/zylos/.env so Codex can
