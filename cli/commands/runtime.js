@@ -99,12 +99,13 @@ async function switchRuntime(target) {
   try { fs.unlinkSync(path.join(monitorDir, 'claude-status.json')); } catch {}
   try { fs.unlinkSync(path.join(monitorDir, 'codex-heartbeat-pending.json')); } catch {}
 
-  // Step 5: Kill old tmux session immediately (we are NOT running inside it).
-  const oldSession = current === 'claude' ? 'claude-main' : 'codex-main';
-  try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
-
-  // Step 6: Restart activity-monitor — it will start the new runtime on its next cycle.
-  console.log('Restarting activity-monitor...');
+  // Step 5: Restart activity-monitor — it will start the new runtime on its next cycle.
+  // NOTE: Do NOT kill the old tmux session here. This command may run from inside the old
+  // session (e.g. via "zylos attach"), and killing its own parent session would terminate
+  // this process before the PM2 restart completes. The activity-monitor handles cleanup:
+  // on startup it kills the other runtime's session (OTHER_SESSION in init()) after a
+  // short delay, then starts the correct new session.
+  console.log('\nRestarting activity-monitor...');
   try {
     execSync('pm2 restart activity-monitor', { stdio: 'pipe' });
     console.log(`  ${green('✓')} done`);
@@ -114,7 +115,8 @@ async function switchRuntime(target) {
   }
 
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
-  console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)} ${dim('Run "zylos status" to confirm.')}`);
+  console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);
+  console.log(dim('The old session will be replaced in ~10 seconds. Then run: zylos attach'));
 }
 
 // ── Help ──────────────────────────────────────────────────────────────────
