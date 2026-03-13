@@ -406,7 +406,7 @@ function isCodexAuthenticated() {
   // Accept env-var auth (OPENAI_API_KEY or CODEX_API_KEY) as well as native login
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
   try {
-    const result = spawnSync('codex', ['login', '--status'], {
+    const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
     });
     return result.status === 0;
