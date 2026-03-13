@@ -627,6 +627,7 @@ function saveCodexApiKeyToEnv(apiKey) {
       fs.mkdirSync(codexDir, { recursive: true });
       let authContent = {};
       try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch {}
+      authContent.auth_mode = 'apikey';
       authContent.OPENAI_API_KEY = apiKey;
       fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
     } catch { /* non-fatal — env var injection is the fallback */ }
