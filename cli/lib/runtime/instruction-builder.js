@@ -64,6 +64,7 @@ export function buildInstructionFile(runtime, opts = {}) {
   }
 
   // Atomic write: write to temp then rename
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
   const tmp = destPath + `.tmp.${process.pid}`;
   fs.writeFileSync(tmp, content, 'utf8');
   fs.renameSync(tmp, destPath);

@@ -1075,11 +1075,11 @@ async function monitorLoop() {
       last_check_human: currentTimeHuman,
       idle_seconds: 0,
       not_running_seconds: notRunningCount,
-      message: 'claude not running in tmux'
+      message: `${adapter.displayName} not running in tmux`
     });
 
     if (state !== lastState) {
-      log('State: STOPPED (claude not running in tmux session)');
+      log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
     }
 
     // Don't restart while rate-limited — restarting can't fix rate limits.
@@ -1305,7 +1305,14 @@ function init() {
   }
 }
 
-init();
+try {
+  init();
+} catch (err) {
+  // init() failure (e.g. unknown runtime in config.json) must not crash the PM2 process
+  // into a tight restart loop. Log and exit cleanly so PM2 backs off via its restart policy.
+  console.error(`[activity-monitor] Fatal: init() failed: ${err.message}`);
+  process.exit(1);
+}
 log(`=== Activity Monitor Started (v21 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 // Use self-scheduling loop instead of setInterval to prevent concurrent
