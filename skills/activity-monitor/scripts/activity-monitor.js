@@ -872,6 +872,9 @@ function sendUsageNotification(message) {
  * Only progresses when Claude is idle with no pending work.
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
+  // /usage is a Claude Code-only slash command — skip for other runtimes
+  if (adapter.displayName !== 'Claude Code') return;
+
   // Abort in-progress check if Claude becomes busy (e.g., message arrived
   // during the wait window). The /usage UI may be overlaid or dismissed —
   // send Escape defensively to clean up, then reset.
@@ -1036,7 +1039,12 @@ async function monitorLoop() {
     return;
   }
 
-  const agentRunning = await adapter.isRunning();
+  let agentRunning = false;
+  try {
+    agentRunning = await adapter.isRunning();
+  } catch (err) {
+    log(`Guardian: adapter.isRunning() threw: ${err.message}`);
+  }
   if (!agentRunning) {
     if (startupGrace > 0) {
       startupGrace -= 1;
@@ -1217,7 +1225,7 @@ function init() {
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
   // with the remaining non-runtime deps (killTmuxSession, notifyPendingChannels, log).
   engine = new HeartbeatEngine({
-    ...adapter.getHeartbeatDeps(),
+    ...(adapter.getHeartbeatDeps() ?? {}),
     killTmuxSession: () => adapter.stop(),
     notifyPendingChannels,
     log,
@@ -1288,5 +1296,10 @@ function init() {
 init();
 log(`=== Activity Monitor Started (v21 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
-setInterval(monitorLoop, INTERVAL);
-monitorLoop();
+// Use self-scheduling loop instead of setInterval to prevent concurrent
+// invocations: async monitorLoop + setInterval can overlap if isRunning()
+// takes >INTERVAL ms (e.g., under high system load), causing state variable races.
+(async function scheduleLoop() {
+  await monitorLoop().catch(err => log(`Monitor loop error: ${err.message}`));
+  setTimeout(scheduleLoop, INTERVAL);
+})();

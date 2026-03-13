@@ -10,13 +10,12 @@ The following rules apply when running on the **OpenAI Codex** runtime.
 
 3. **Use shell tools for web access.** You do not have built-in `WebSearch` or `WebFetch` tools. Use `curl`, `wget`, or browser automation for web access. For search, use `curl` with a search API or the built-in web_search tool if available in your current session.
 
-### Sandbox Behavior
+### Approval Behavior
 
-You are running in `--full-auto` mode (Landlock + seccomp sandbox):
-- File operations within the working directory (`~/zylos/`) are auto-approved
-- Network requests are permitted
-- Operations outside the working directory may prompt for confirmation
-- System package installation requires `sudo` and may be restricted by sandbox policy
+You are running with `--dangerously-bypass-approvals-and-sandbox` (all operations auto-approved, no sandbox):
+- All file operations, shell commands, and network requests are auto-approved — no confirmation prompts
+- There is no sandboxing; operations run directly on the host system
+- Use judgment about destructive operations (e.g. `rm -rf`, force pushes) — they cannot be undone
 
 ### Heartbeat
 
