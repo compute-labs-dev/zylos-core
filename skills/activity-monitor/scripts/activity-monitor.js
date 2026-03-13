@@ -364,14 +364,14 @@ function enqueueStartupControl() {
  * Clears stale state files, delegates launch to the RuntimeAdapter,
  * then enqueues the startup control prompt if no session-start hook is installed.
  */
-function startAgent() {
+async function startAgent() {
   if (isMaintenanceRunning()) {
     log('Guardian: Maintenance script detected, waiting for completion...');
     waitForMaintenance();
   }
 
   // Skip startup if not authenticated — avoids interactive login prompts in tmux
-  const authResult = adapter.checkAuth ? adapter.checkAuth() : { ok: true };
+  const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
   if (!authResult.ok) {
     log(`Guardian: ${adapter.displayName} not authenticated (${authResult.reason ?? 'unknown'}), skipping startup`);
     return;
