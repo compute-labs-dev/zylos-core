@@ -258,16 +258,16 @@ describe('HeartbeatEngine — basic health transitions', () => {
     expect(engine.health).toBe('down');
   });
 
-  it('triggerRecovery from rate_limited increments failure count but does not change health', () => {
-    // triggerRecovery is not the recovery path for rate_limited — processHeartbeat
-    // handles the transition. triggerRecovery only sets health when called from 'ok'.
+  it('triggerRecovery from rate_limited is a no-op (health and failure count unchanged)', () => {
+    // triggerRecovery returns early in rate_limited state — the recovery path for
+    // rate_limited is processHeartbeat() once the cooldown expires, not triggerRecovery.
+    // So neither health nor restartFailureCount should change.
     const engine = new HeartbeatEngine(makeDeps());
     engine.enterRateLimited(9999);
 
     engine.triggerRecovery('external_trigger');
-    // Health stays rate_limited (setHealth only transitions from 'ok')
-    // but failure count increments — no crash, no deadlock
+    // Health stays rate_limited, failure count stays 0 (early return before increment)
     expect(engine.health).toBe('rate_limited');
-    expect(engine.restartFailureCount).toBe(1);
+    expect(engine.restartFailureCount).toBe(0);
   });
 });

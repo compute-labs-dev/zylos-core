@@ -48,6 +48,10 @@ export function createCodexProbe({
   ackDeadline = 300,
   stuckAckDeadline = 120,
 }) {
+  // Record creation time so SQLite queries ignore threads from prior sessions.
+  // Matches the start-time filter used in CodexContextMonitor._getActiveRolloutPath().
+  const _startTime = Math.floor(Date.now() / 1000);
+
   return {
 
     // ── HeartbeatEngine probe deps ──────────────────────────────────────────
@@ -67,7 +71,7 @@ export function createCodexProbe({
       const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
 
       // Capture rollout baseline before injecting (mtime changes only when agent writes)
-      const rolloutPath = _getActiveRolloutPath(sqliteFile);
+      const rolloutPath = _getActiveRolloutPath(sqliteFile, _startTime);
       const rolloutMtime = rolloutPath ? _getMtime(rolloutPath) : 0;
 
       // Inject heartbeat message
@@ -202,13 +206,20 @@ function _sendTmuxMessage(session, text) {
 
 /**
  * Get the active Codex rollout JSONL path from SQLite threads table.
+ *
+ * Filters to threads updated after startTime (epoch seconds) so stale threads
+ * from a previous session are never selected after a restart — matching the
+ * same guard used in CodexContextMonitor._getActiveRolloutPath().
+ *
  * @param {string} sqliteFile
+ * @param {number} startTime - Epoch seconds; only threads updated at or after this are considered
  * @returns {string | null}
  */
-function _getActiveRolloutPath(sqliteFile) {
+function _getActiveRolloutPath(sqliteFile, startTime) {
   try {
     const sql = `SELECT rollout_path FROM threads
                  WHERE archived = 0
+                   AND updated_at >= ${startTime}
                  ORDER BY updated_at DESC
                  LIMIT 1;`;
     const out = execFileSync('sqlite3', [sqliteFile, sql], {

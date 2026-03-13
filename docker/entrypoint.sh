@@ -137,13 +137,15 @@ sleep 3
 ok "Services started"
 
 # ── Step 4: Start the configured agent runtime in tmux ───────────────────────
-# Read configured runtime from config.json (defaults to 'claude' if absent).
-ZYLOS_RUNTIME=$(node -e "
-  try {
-    const c = JSON.parse(require('fs').readFileSync('${ZYLOS_DIR}/.zylos/config.json','utf8'));
-    process.stdout.write(c.runtime || 'claude');
-  } catch { process.stdout.write('claude'); }
-" 2>/dev/null || echo "claude")
+# Determine runtime: ZYLOS_RUNTIME env var always wins; fall back to config.json.
+if [ -z "${ZYLOS_RUNTIME:-}" ]; then
+  ZYLOS_RUNTIME=$(node -e "
+    try {
+      const c = JSON.parse(require('fs').readFileSync('${ZYLOS_DIR}/.zylos/config.json','utf8'));
+      process.stdout.write(c.runtime || 'claude');
+    } catch { process.stdout.write('claude'); }
+  " 2>/dev/null || echo "claude")
+fi
 
 step 4 "Starting ${ZYLOS_RUNTIME} agent..."
 
