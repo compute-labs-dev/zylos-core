@@ -1102,7 +1102,7 @@ async function monitorLoop() {
     }
   }
 
-  let activity = getConversationFileModTime();
+  let activity = adapter.displayName === 'Claude Code' ? getConversationFileModTime() : null;
   let source = 'conv_file';
 
   if (!activity) {

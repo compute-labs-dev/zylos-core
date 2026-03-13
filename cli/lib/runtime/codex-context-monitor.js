@@ -157,7 +157,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
    * @returns {number}
    */
   _getModelCeiling() {
-    if (this._cachedCeiling) return this._cachedCeiling;
+    if (this._cachedCeiling !== null) return this._cachedCeiling;
 
     try {
       const cache = JSON.parse(fs.readFileSync(MODELS_CACHE_FILE, 'utf8'));
