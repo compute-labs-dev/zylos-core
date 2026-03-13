@@ -403,6 +403,8 @@ function isClaudeAuthenticated() {
  * `codex login --status` exits 0 when authenticated, non-zero otherwise.
  */
 function isCodexAuthenticated() {
+  // Accept env-var auth (OPENAI_API_KEY or CODEX_API_KEY) as well as native login
+  if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
   try {
     const result = spawnSync('codex', ['login', '--status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
