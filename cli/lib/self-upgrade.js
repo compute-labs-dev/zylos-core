@@ -530,10 +530,12 @@ function step1_backupCoreSkills(ctx) {
       copyTree(SKILLS_DIR, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
     }
 
-    // Backup CLAUDE.md (will be modified in step 6)
-    const claudeMdPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
-    if (fs.existsSync(claudeMdPath)) {
-      fs.copyFileSync(claudeMdPath, path.join(backupDir, 'CLAUDE.md'));
+    // Backup instruction files (will be modified in step 7)
+    for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
+      const src = path.join(ZYLOS_DIR, name);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(backupDir, name));
+      }
     }
 
     ctx.backupDir = backupDir;
@@ -720,7 +722,14 @@ function step6_installSkillDeps(ctx) {
 }
 
 /**
- * Step 7: sync CLAUDE.md managed sections
+ * Step 7: update instruction files from new templates.
+ *
+ * v0.4.0+ installs (ZYLOS.md present): rebuild CLAUDE.md and AGENTS.md from
+ * ZYLOS.md + new addon templates (from ctx.tempDir). This keeps both files
+ * current after upgrade without touching user customizations in ZYLOS.md.
+ *
+ * Pre-v0.4.0 installs (ZYLOS.md absent): fall through to the managed-section
+ * sync on CLAUDE.md (legacy path).
  */
 function step7_syncClaudeMd(ctx) {
   const startTime = Date.now();
@@ -730,6 +739,30 @@ function step7_syncClaudeMd(ctx) {
     return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
+  // v0.4.0+ path: rebuild instruction files from ZYLOS.md + new addon templates
+  const zylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  if (fs.existsSync(zylosMd)) {
+    try {
+      const core = fs.readFileSync(zylosMd, 'utf8');
+      const rebuilt = [];
+      for (const [addonFile, destFile] of [
+        ['claude-addon.md', 'CLAUDE.md'],
+        ['codex-addon.md', 'AGENTS.md'],
+      ]) {
+        const addonPath = path.join(templateDir, addonFile);
+        if (!fs.existsSync(addonPath)) continue;
+        const content = core.trimEnd() + '\n\n' + fs.readFileSync(addonPath, 'utf8').trimEnd() + '\n';
+        fs.writeFileSync(path.join(ZYLOS_DIR, destFile), content, 'utf8');
+        rebuilt.push(destFile);
+      }
+      const msg = rebuilt.length ? `rebuilt ${rebuilt.join(', ')} from ZYLOS.md` : 'no addon templates found';
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+    } catch (err) {
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    }
+  }
+
+  // Pre-v0.4.0 path: sync managed sections in CLAUDE.md
   try {
     const syncResult = syncClaudeMd(templateDir);
     if (syncResult.skipped) {
@@ -1070,15 +1103,17 @@ function rollbackSelf(ctx) {
     }
   }
 
-  // Restore CLAUDE.md from backup
+  // Restore instruction files from backup
   if (ctx.backupDir) {
-    const backupClaudeMd = path.join(ctx.backupDir, 'CLAUDE.md');
-    if (fs.existsSync(backupClaudeMd)) {
-      try {
-        fs.copyFileSync(backupClaudeMd, path.join(ZYLOS_DIR, 'CLAUDE.md'));
-        results.push({ action: 'restore_claude_md', success: true });
-      } catch (err) {
-        results.push({ action: 'restore_claude_md', success: false, error: err.message });
+    for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
+      const backup = path.join(ctx.backupDir, name);
+      if (fs.existsSync(backup)) {
+        try {
+          fs.copyFileSync(backup, path.join(ZYLOS_DIR, name));
+          results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: true });
+        } catch (err) {
+          results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: false, error: err.message });
+        }
       }
     }
   }

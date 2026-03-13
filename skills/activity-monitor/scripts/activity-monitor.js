@@ -1230,6 +1230,28 @@ async function monitorLoop() {
   lastState = state;
 }
 
+/**
+ * Read core memory files and return a condensed snapshot string for injection
+ * into AGENTS.md on Codex session rotation. Gives the new session context from
+ * the previous session so autonomous work is not silently interrupted.
+ *
+ * @returns {string} Snapshot content, or empty string if memory dir is absent.
+ */
+function _readMemorySnapshot() {
+  const memDir = path.join(ZYLOS_DIR, 'memory');
+  const files = ['identity.md', 'state.md', 'references.md'];
+  const parts = [];
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(path.join(memDir, file), 'utf8').trim();
+      if (content) parts.push(`## ${file}\n\n${content}`);
+    } catch { /* file absent — skip */ }
+  }
+  return parts.length
+    ? `# Memory Snapshot (auto-injected on session rotation)\n\n${parts.join('\n\n')}`
+    : '';
+}
+
 function init() {
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
@@ -1319,10 +1341,12 @@ function init() {
         log(`Context at ${pct}% (${used}/${ceiling}), triggering session rotation`);
         // Codex has no skill-invocation mechanism (no /clear equivalent).
         // The activity monitor directly stops and relaunches to start a fresh session.
+        // Read core memory files first so the new session has continuity.
         try {
+          const memorySnapshot = _readMemorySnapshot();
           adapter.stop();
           await new Promise(r => setTimeout(r, 2000));
-          await adapter.launch();
+          await adapter.launch({ memorySnapshot });
           log(`Codex session rotated (context ${pct}% exceeded threshold)`);
         } catch (err) {
           log(`Codex session rotation failed: ${err.message}`);

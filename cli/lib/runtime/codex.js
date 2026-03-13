@@ -41,10 +41,13 @@ export class CodexAdapter extends RuntimeAdapter {
 
   /**
    * Build AGENTS.md = ZYLOS.md + codex-addon.md.
+   *
+   * @param {object} [opts]
+   * @param {string} [opts.memorySnapshot] - Memory content to append (e.g. on session rotation)
    * @returns {Promise<string>} Path to the generated AGENTS.md
    */
-  async buildInstructionFile() {
-    return buildInstructionFile('codex');
+  async buildInstructionFile(opts = {}) {
+    return buildInstructionFile('codex', opts);
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -150,8 +153,8 @@ export class CodexAdapter extends RuntimeAdapter {
   async launch(opts = {}) {
     const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
 
-    // 1. Build AGENTS.md before launching
-    await this.buildInstructionFile();
+    // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
+    await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
 
     // 2. Build the codex command
     const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
