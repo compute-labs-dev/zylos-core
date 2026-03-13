@@ -60,7 +60,7 @@ export class CodexAdapter extends RuntimeAdapter {
    *   1. Environment variables: OPENAI_API_KEY or CODEX_API_KEY present — Codex
    *      reads these directly, so no persistent login is needed. This covers
    *      Docker / server deployments where credentials are injected via env.
-   *   2. `codex login --status` exits 0 — interactive / OAuth login path.
+   *   2. `codex login status` exits 0 — interactive / OAuth login path.
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
@@ -99,7 +99,7 @@ export class CodexAdapter extends RuntimeAdapter {
       // it does NOT throw, so we must check explicitly.
       if (result.error) throw result.error;
       if (result.status === 0) {
-        return { ok: true, reason: 'codex login --status: authenticated' };
+        return { ok: true, reason: 'codex login status: authenticated' };
       }
       return { ok: false, reason: 'not logged in (run: codex login or set OPENAI_API_KEY)' };
     } catch (e) {
@@ -220,8 +220,8 @@ export class CodexAdapter extends RuntimeAdapter {
         const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
         const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
         const parts = [];
-        if (openaiMatch) parts.push(`export OPENAI_API_KEY=${openaiMatch[1]}`);
-        if (codexApiMatch) parts.push(`export CODEX_API_KEY=${codexApiMatch[1]}`);
+        if (openaiMatch) parts.push(`export OPENAI_API_KEY=${openaiMatch[1].trim()}`);
+        if (codexApiMatch) parts.push(`export CODEX_API_KEY=${codexApiMatch[1].trim()}`);
         if (parts.length > 0) envSnippet = parts.join('; ') + '; ';
       } catch { /* .env absent or no keys — rely on native login */ }
 

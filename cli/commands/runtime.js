@@ -96,7 +96,8 @@ async function switchRuntime(target) {
   console.log(`  ${green('✓')} done`);
 
   // Step 4: Clear stale health state from old runtime.
-  try { fs.unlinkSync(path.join(monitorDir, 'claude-status.json')); } catch {}
+  try { fs.unlinkSync(path.join(monitorDir, 'agent-status.json')); } catch {}
+  try { fs.unlinkSync(path.join(monitorDir, 'heartbeat-pending.json')); } catch {}
   try { fs.unlinkSync(path.join(monitorDir, 'codex-heartbeat-pending.json')); } catch {}
 
   // Step 5: Restart activity-monitor — it will start the new runtime on its next cycle.

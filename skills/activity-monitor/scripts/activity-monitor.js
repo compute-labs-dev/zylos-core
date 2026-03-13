@@ -106,7 +106,7 @@ const __dirname = path.dirname(__filename);
 // Core runtime config
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
-const STATUS_FILE = path.join(MONITOR_DIR, 'claude-status.json');
+const STATUS_FILE = path.join(MONITOR_DIR, 'agent-status.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
@@ -1383,10 +1383,10 @@ function init() {
     log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
   }
 
-  // On runtime switch: the old session can't be killed by init.js (it would be
-  // killing its own parent process). Kill it here instead — the activity-monitor
-  // is a separate PM2 process and safe to do so. Delay 10 s to give the previous
-  // runtime time to finish its response before we kill its session.
+  // Startup cleanup: kill the other runtime's tmux session if it exists.
+  // Runs on every startup (not just runtime switches) — if the other session is
+  // absent (normal case) the kill fails silently. The 10 s delay gives a running
+  // agent time to finish its current response before being terminated.
   const OTHER_SESSION = adapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
   setTimeout(() => {
     try {
