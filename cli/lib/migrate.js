@@ -105,6 +105,16 @@ function migrateClaudeMdToZylosMd() {
   const claudeMdNew = CLAUDE_MD + `.new.${process.pid}`;
   fs.writeFileSync(claudeMdNew, newClaudeContent, 'utf8');
 
+  // Prepend a migration notice to ZYLOS.md so users know to review it before
+  // switching runtimes. The old CLAUDE.md may contain Claude-specific rules
+  // (e.g. EnterPlanMode, Task agents) that should be removed from the
+  // runtime-agnostic base before AGENTS.md is generated for Codex.
+  const migrationNotice = `<!-- MIGRATION NOTE (zylos v0.4.0): This file was created from your previous
+     CLAUDE.md. It may contain Claude-specific instructions. If you plan to
+     use Codex, review this file and remove any Claude-only rules before
+     switching runtimes via "zylos init --runtime codex". -->\n\n`;
+  fs.writeFileSync(CLAUDE_MD, migrationNotice + userContent, 'utf8');
+
   // Atomic sequence:
   //   rename CLAUDE.md → ZYLOS.md  (user's existing content is now ZYLOS.md)
   //   rename CLAUDE.md.new → CLAUDE.md  (generated content is now CLAUDE.md)
