@@ -19,6 +19,7 @@ import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, hea
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { runMigrations } from '../lib/migrate.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -436,7 +437,7 @@ function writeCodexConfig(projectDir) {
     if (fs.existsSync(configPath)) {
       existing = fs.readFileSync(configPath, 'utf8');
     }
-    if (existing.includes('trust_level')) return true; // already configured
+    if (existing.includes(`[projects."${absProject}"]`)) return true; // already configured for this project
     const addition =
       `[projects."${absProject}"]\ntrust_level = "trusted"\n` +
       `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n`;
@@ -2248,6 +2249,9 @@ export async function initCommand(args) {
       }
     }
 
+    // Run data migrations before deploying templates (idempotent)
+    runMigrations();
+
     if (!quiet) console.log(heading('Deploying templates...'));
     deployTemplates();
 
@@ -2326,7 +2330,8 @@ export async function initCommand(args) {
     if (!quiet) console.log(`  ${success('Added ~/zylos/bin to PATH')}`);
   }
 
-  // Step 7: Deploy templates
+  // Step 7: Run data migrations then deploy templates (both idempotent)
+  runMigrations();
   deployTemplates();
   if (!quiet) console.log(`  ${success('Templates deployed')}`);
 

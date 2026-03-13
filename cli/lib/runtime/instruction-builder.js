@@ -40,7 +40,10 @@ const TEMPLATE_FILES = {
  * @returns {string} Path to the generated file
  */
 export function buildInstructionFile(runtime, opts = {}) {
-  const coreSrc = TEMPLATE_FILES.core;
+  // Prefer user's ~/zylos/ZYLOS.md (may contain customizations) over the package template.
+  // The package template is used as fallback on first install before deployTemplates() copies it.
+  const userZylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  const coreSrc = fs.existsSync(userZylosMd) ? userZylosMd : TEMPLATE_FILES.core;
   const addonSrc = runtime === 'codex' ? TEMPLATE_FILES.codexAddon : TEMPLATE_FILES.claudeAddon;
   const destPath = OUTPUT_FILES[runtime];
 
@@ -90,8 +93,10 @@ export function needsRebuild(runtime) {
   if (!fs.existsSync(destPath)) return true;
 
   const destMtime = fs.statSync(destPath).mtimeMs;
-  const coreMtime = fs.existsSync(TEMPLATE_FILES.core)
-    ? fs.statSync(TEMPLATE_FILES.core).mtimeMs : 0;
+  const userZylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  const coreFile = fs.existsSync(userZylosMd) ? userZylosMd : TEMPLATE_FILES.core;
+  const coreMtime = fs.existsSync(coreFile)
+    ? fs.statSync(coreFile).mtimeMs : 0;
   const addonSrc = runtime === 'codex' ? TEMPLATE_FILES.codexAddon : TEMPLATE_FILES.claudeAddon;
   const addonMtime = fs.existsSync(addonSrc)
     ? fs.statSync(addonSrc).mtimeMs : 0;
