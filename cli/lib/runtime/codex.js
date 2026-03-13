@@ -79,9 +79,9 @@ export class CodexAdapter extends RuntimeAdapter {
       }
     } catch { /* .env absent — not an auth path */ }
 
-    // Path 3: persistent login via `codex login`.
+    // Path 3: persistent login via `codex login status` (subcommand, not flag).
     try {
-      const result = spawnSync(CODEX_BIN, ['login', '--status'], {
+      const result = spawnSync(CODEX_BIN, ['login', 'status'], {
         stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
       });
       // spawnSync sets result.error (status=null) when the binary is missing —
