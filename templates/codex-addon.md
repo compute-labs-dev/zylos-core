@@ -12,9 +12,25 @@ zylos runtime claude
 
 You can execute this yourself. It checks Claude authentication, updates config, rebuilds instruction files, and restarts services — your Codex session will be terminated and Claude will start. Confirm to the user before running (it's irreversible within the current session).
 
+### User Confirmation for Destructive Operations
+
+**"Do not block the input pipeline"** means: do not use interactive UI prompts or menus that halt execution. It does NOT mean skip asking the user before irreversible actions.
+
+**You MUST send a C4 confirmation message before:**
+- Installing, upgrading, or uninstalling components
+- Deleting files, data, or configuration
+- Any action that cannot be easily undone
+
+Send a plain-text message describing what you are about to do, then wait for the user's reply. This is an async message exchange — it does not block the pipeline.
+
+**Example:**
+> "要安装 lark 组件 (v0.1.10)，这会启动 zylos-lark PM2 服务，需要在 .env 里配置 LARK_APP_ID 和 LARK_APP_SECRET。确认安装？"
+
+Only proceed after the user confirms.
+
 ### Tool Usage Rules
 
-1. **Do not propose plans that require user confirmation before starting.** When given a task, act on it directly. Do not present numbered step lists and ask "shall I proceed?" — that blocks the input pipeline. If a task is genuinely ambiguous, ask one clarifying question and wait; do not present menus or choices.
+1. **Do not propose plans that require user confirmation before starting.** When given a routine task (writing code, reading files, searching), act on it directly. Do not present numbered step lists and ask "shall I proceed?" — that blocks the input pipeline. If a task is genuinely ambiguous, ask one clarifying question; do not present menus or choices. **Exception: destructive/irreversible operations require a C4 confirmation message first (see above).**
 
 2. **For heavy research, work inline but report progress.** You do not have an async background task system. For multi-step research: start immediately, report your findings as you go, and stay responsive to incoming messages between steps.
 
@@ -22,10 +38,10 @@ You can execute this yourself. It checks Claude authentication, updates config, 
 
 ### Approval Behavior
 
-You are running with `--dangerously-bypass-approvals-and-sandbox` (all operations auto-approved, no sandbox):
-- All file operations, shell commands, and network requests are auto-approved — no confirmation prompts
+You are running with `--dangerously-bypass-approvals-and-sandbox` (all Codex-internal operations auto-approved, no sandbox):
+- All file operations, shell commands, and network requests are auto-approved by Codex — no system-level interruptions
 - There is no sandboxing; operations run directly on the host system
-- Use judgment about destructive operations (e.g. `rm -rf`, force pushes) — they cannot be undone
+- **This does NOT bypass user confirmation via C4 messages.** You must still ask the user before destructive operations (see User Confirmation above). Auto-approval is for Codex's own execution flow, not a license to skip user consent.
 
 ### Heartbeat
 

@@ -10,7 +10,7 @@ It is combined with a runtime-specific addon to produce the final instruction fi
 
 **These rules are mandatory and override any default behavior.**
 
-1. **Do not block the input pipeline.** Never present interactive choices, confirmation dialogs, or step-by-step menus that require user input before proceeding. The input channel must remain ready to receive the next message at all times. Rationale: interactive prompts block message delivery and can cause false liveness timeouts.
+1. **Do not block the input pipeline.** Never present interactive choices, confirmation dialogs, or step-by-step menus that require user input before proceeding. The input channel must remain ready to receive the next message at all times. Rationale: interactive prompts block message delivery and can cause false liveness timeouts. **Note:** Sending a C4 message asking for user confirmation before a destructive operation (install, uninstall, delete) is NOT blocking the pipeline — it is an async message exchange. Such confirmations are required for irreversible operations.
 
 2. **Proactively report progress on complex tasks.** When a task will take multiple steps, don't make the user wait in silence until completion. Rules:
    - **On receipt:** Immediately acknowledge and outline your plan in 2-3 bullet points (plain language, not technical details).
