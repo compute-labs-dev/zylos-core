@@ -219,37 +219,28 @@ export class CodexAdapter extends RuntimeAdapter {
         : `${envSnippet}cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
-      // New tmux session — inject API keys from ~/zylos/.env so Codex can
-      // authenticate in env-var deployments (Docker / server / PM2 restart).
-      let tmpEnv = null;
+      // New tmux session — inject API keys from ~/zylos/.env via tmux -e flags.
+      // Using -e (same as PATH) is the most reliable approach: no shell sourcing
+      // needed, tmux handles env var propagation directly to the session.
+      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
+      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
       try {
         const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
         const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
         const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
-        const envParts = [];
-        if (openaiMatch) envParts.push(`OPENAI_API_KEY=${openaiMatch[1]}`);
-        if (codexApiMatch) envParts.push(`CODEX_API_KEY=${codexApiMatch[1]}`);
-        if (envParts.length > 0) {
-          tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
-          fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
-        }
+        if (openaiMatch) tmuxArgs.push('-e', `OPENAI_API_KEY=${openaiMatch[1].trim()}`);
+        if (codexApiMatch) tmuxArgs.push('-e', `CODEX_API_KEY=${codexApiMatch[1].trim()}`);
       } catch { /* .env absent or no keys — Codex will use native login */ }
-
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
-      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
       const promptSnippet = tmpPrompt
         ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
         : codexCmd;
-      const shellCmd = tmpEnv
-        ? `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
+      const shellCmd = `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
       tmuxArgs.push('--', shellCmd);
 
       try {
         execFileSync('tmux', tmuxArgs);
       } catch (e) {
-        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
         if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
