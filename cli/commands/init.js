@@ -783,9 +783,9 @@ async function guideBypassAcceptance() {
     if (process.env.ANTHROPIC_API_KEY) {
       tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpEnv, `ANTHROPIC_API_KEY='${process.env.ANTHROPIC_API_KEY}'\n`, { mode: 0o600 });
-      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
     } else {
-      shellCmd = `cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+      shellCmd = `cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
     }
     tmuxArgs.push('--', shellCmd);
     try {

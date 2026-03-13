@@ -156,18 +156,18 @@ export class CodexAdapter extends RuntimeAdapter {
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
-    const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${exitLogFile}`;
+    const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (_tmuxHasSession()) {
       // Existing session — send command via tmux
-      const cmd = `cd ${ZYLOS_DIR}; ${codexCmd}; ${exitLogSnippet}`;
+      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New tmux session
       const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
-      const shellCmd = `cd ${ZYLOS_DIR} && ${codexCmd}; ${exitLogSnippet}`;
+      const shellCmd = `cd "${ZYLOS_DIR}" && ${codexCmd}; ${exitLogSnippet}`;
       tmuxArgs.push('--', shellCmd);
 
       try {
@@ -186,9 +186,6 @@ export class CodexAdapter extends RuntimeAdapter {
    *
    * Includes: enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
    *           readHeartbeatPending, clearHeartbeatPending.
-   *
-   * Phase 7 will merge these with the remaining deps (killTmuxSession, etc.)
-   * when migrating activity-monitor.js to use RuntimeAdapter.
    *
    * @returns {object}
    */

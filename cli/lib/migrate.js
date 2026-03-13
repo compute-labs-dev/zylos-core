@@ -13,6 +13,7 @@ import path from 'node:path';
 import { ZYLOS_DIR } from './config.js';
 
 const CLAUDE_MD = path.join(ZYLOS_DIR, 'CLAUDE.md');
+const AGENTS_MD = path.join(ZYLOS_DIR, 'AGENTS.md');
 const ZYLOS_MD = path.join(ZYLOS_DIR, 'ZYLOS.md');
 
 /**
@@ -53,6 +54,8 @@ function migrateClaudeMdToZylosMd() {
   const zylosMdTemplate = path.join(PACKAGE_ROOT, 'templates', 'ZYLOS.md');
   const claudeAddonTemplate = path.join(PACKAGE_ROOT, 'templates', 'claude-addon.md');
 
+  const codexAddonTemplate = path.join(PACKAGE_ROOT, 'templates', 'codex-addon.md');
+
   // Already migrated
   if (fs.existsSync(ZYLOS_MD)) {
     // Crash recovery: regenerate CLAUDE.md if it went missing.
@@ -67,6 +70,18 @@ function migrateClaudeMdToZylosMd() {
       const tmp = CLAUDE_MD + `.tmp.${process.pid}`;
       fs.writeFileSync(tmp, content, 'utf8');
       fs.renameSync(tmp, CLAUDE_MD);
+    }
+    // Crash recovery: regenerate AGENTS.md if it went missing.
+    if (!fs.existsSync(AGENTS_MD) && fs.existsSync(codexAddonTemplate)) {
+      const coreSrc = fs.existsSync(ZYLOS_MD) ? ZYLOS_MD : zylosMdTemplate;
+      if (!fs.existsSync(coreSrc)) return false;
+      const content = fs.readFileSync(coreSrc, 'utf8').trimEnd()
+        + '\n\n'
+        + fs.readFileSync(codexAddonTemplate, 'utf8').trimEnd()
+        + '\n';
+      const tmp = AGENTS_MD + `.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, content, 'utf8');
+      fs.renameSync(tmp, AGENTS_MD);
     }
     return false;
   }

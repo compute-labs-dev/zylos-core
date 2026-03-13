@@ -209,11 +209,11 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
-    const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${exitLogFile}`;
+    const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (_tmuxHasSession()) {
       // Existing session — send command via tmux
-      const cmd = `cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`;
+      const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New tmux session
@@ -231,9 +231,9 @@ export class ClaudeAdapter extends RuntimeAdapter {
         if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
         tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
         fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
-        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
+        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
       } else {
-        shellCmd = `cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
+        shellCmd = `cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
       }
 
       tmuxArgs.push('--', shellCmd);
@@ -253,9 +253,6 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * Returns runtime-specific HeartbeatEngine deps for Claude Code.
    * Includes: enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
    *           readHeartbeatPending, clearHeartbeatPending.
-   *
-   * Phase 7 will merge these with the remaining deps (killTmuxSession, etc.)
-   * when migrating activity-monitor.js to use RuntimeAdapter.
    *
    * @returns {object}
    */

@@ -39,7 +39,6 @@ export class CodexContextMonitor extends ContextMonitorBase {
   constructor(opts = {}) {
     super(opts);
     this._model = opts.model ?? null;
-    this._cachedCeiling = null;
   }
 
   /**
@@ -77,8 +76,11 @@ export class CodexContextMonitor extends ContextMonitorBase {
       const offset = stat.size - readBytes;
       const buf = Buffer.alloc(readBytes);
       const fd = fs.openSync(rolloutPath, 'r');
-      fs.readSync(fd, buf, 0, readBytes, offset);
-      fs.closeSync(fd);
+      try {
+        fs.readSync(fd, buf, 0, readBytes, offset);
+      } finally {
+        fs.closeSync(fd);
+      }
 
       const lines = buf.toString('utf8').split('\n');
 
@@ -152,13 +154,13 @@ export class CodexContextMonitor extends ContextMonitorBase {
   /**
    * Get effective context window ceiling from ~/.codex/models_cache.json.
    * Effective ceiling = context_window × (effective_context_window_percent / 100).
-   * Result is cached after first successful read.
+   *
+   * Not cached — re-reads on each call so a model upgrade mid-session is
+   * reflected without requiring a PM2 restart. The file is small (~2 KB).
    *
    * @returns {number}
    */
   _getModelCeiling() {
-    if (this._cachedCeiling !== null) return this._cachedCeiling;
-
     try {
       const cache = JSON.parse(fs.readFileSync(MODELS_CACHE_FILE, 'utf8'));
       const models = cache.models ?? [];
@@ -168,8 +170,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
 
       if (model?.context_window) {
         const pct = model.effective_context_window_percent ?? 100;
-        this._cachedCeiling = Math.round(model.context_window * (pct / 100));
-        return this._cachedCeiling;
+        return Math.round(model.context_window * (pct / 100));
       }
     } catch { /* models_cache.json missing or malformed */ }
 
