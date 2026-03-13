@@ -1213,6 +1213,12 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   // Migration hints: step 8 already applied settings sync via the newly installed script.
   const migrationHints = [];
 
+  // Check if instruction files were rebuilt (CLAUDE.md / AGENTS.md) — used by
+  // component.js to auto-enqueue a Claude restart after the reply is sent, so
+  // Claude does not prompt the user about restarting.
+  const step7 = ctx.steps.find(s => s.step === 7);
+  const instructionFilesRebuilt = step7?.status === 'done' && Boolean(step7?.message?.includes('rebuilt'));
+
   return {
     action: 'self_upgrade',
     success: true,
@@ -1222,6 +1228,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     backupDir: ctx.backupDir,
     templates,
     migrationHints,
+    instructionFilesRebuilt,
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };
