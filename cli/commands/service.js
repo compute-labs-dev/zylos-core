@@ -27,10 +27,25 @@ export function showStatus() {
     let authenticated = false;
     try {
       if (isCodex) {
-        const result = spawnSync('codex', ['login', '--status'], {
-          stdio: 'pipe', encoding: 'utf8', timeout: 10000,
-        });
-        authenticated = result.status === 0;
+        // Path 1: env-var credentials (already exported in this process)
+        if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
+          authenticated = true;
+        } else {
+          // Path 2: API key stored in ~/zylos/.env (not exported to this process)
+          try {
+            const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+            if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) {
+              authenticated = true;
+            }
+          } catch { /* .env absent */ }
+        }
+        // Path 3: native login (device-auth / browser)
+        if (!authenticated) {
+          const result = spawnSync('codex', ['login', 'status'], {
+            stdio: 'pipe', encoding: 'utf8', timeout: 10000,
+          });
+          authenticated = result.status === 0;
+        }
       } else {
         const result = spawnSync('claude', ['auth', 'status'], {
           stdio: 'pipe', encoding: 'utf8', timeout: 10000,
