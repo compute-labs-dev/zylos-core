@@ -1382,6 +1382,18 @@ function init() {
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
   }
+
+  // On runtime switch: the old session can't be killed by init.js (it would be
+  // killing its own parent process). Kill it here instead — the activity-monitor
+  // is a separate PM2 process and safe to do so. Delay 10 s to give the previous
+  // runtime time to finish its response before we kill its session.
+  const OTHER_SESSION = adapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
+  setTimeout(() => {
+    try {
+      execSync(`tmux kill-session -t "${OTHER_SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+      log(`Startup cleanup: killed stale ${OTHER_SESSION} session from previous runtime`);
+    } catch { /* session didn't exist — normal startup, no-op */ }
+  }, 10_000);
 }
 
 try {

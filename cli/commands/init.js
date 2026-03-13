@@ -2326,10 +2326,12 @@ export async function initCommand(args) {
       exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
-    // On runtime switch: kill old session and clear stale health state before restart
+    // On runtime switch: clear stale health state before restart.
+    // NOTE: do NOT kill the old session here — init.js may itself be running
+    // inside that session (as a subprocess of the current runtime), so
+    // tmux kill-session would silently fail or kill the parent process mid-run.
+    // The new activity-monitor kills the stale session on startup instead.
     if (existingRuntime && existingRuntime !== selectedRuntime) {
-      const oldSession = existingRuntime === 'claude' ? 'claude-main' : 'codex-main';
-      try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
       try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json')); } catch {}
       try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
     }
