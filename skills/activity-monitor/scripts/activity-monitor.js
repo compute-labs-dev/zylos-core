@@ -527,6 +527,33 @@ function sendRecoveryNotice(channel, endpoint) {
   }
 }
 
+/**
+ * Query the C4 database for the most recently active user channel.
+ * Returns { channel, endpoint } with the msg: component stripped so the
+ * result can be used for proactive (non-reply) sends.
+ *
+ * @returns {{ channel: string, endpoint: string } | null}
+ */
+function getLastActiveChannel() {
+  try {
+    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
+    // Use tab (CHAR(9)) as separator — safe since channel names and endpoint IDs never contain tabs.
+    const result = execSync(
+      `sqlite3 "${dbPath}" "SELECT channel || CHAR(9) || endpoint_id FROM conversations WHERE direction='in' ORDER BY id DESC LIMIT 1" 2>/dev/null`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim();
+    if (!result) return null;
+    const tabIdx = result.indexOf('\t');
+    if (tabIdx === -1) return null;
+    const channel = result.slice(0, tabIdx);
+    // Strip msg:... so we send a new standalone message, not a thread reply.
+    const endpoint = result.slice(tabIdx + 1).replace(/\|msg:[^|]*/g, '');
+    return channel && endpoint ? { channel, endpoint } : null;
+  } catch {
+    return null;
+  }
+}
+
 function notifyPendingChannels() {
   if (!fs.existsSync(PENDING_CHANNELS_FILE)) {
     return;
@@ -1362,6 +1389,22 @@ function init() {
         // Read core memory files first so the new session has continuity.
         try {
           const memorySnapshot = _readMemorySnapshot();
+
+          // Notify the last active channel before stopping — mirrors Claude's behaviour
+          // where the agent notifies users before initiating a context rotation.
+          // Done here (infrastructure level) rather than relying on the new session to
+          // self-report, which was unreliable in practice.
+          const lastChannel = getLastActiveChannel();
+          if (lastChannel) {
+            try {
+              execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
+                '上下文快满了，正在切换新 session，记忆完整保留，稍等片刻…'], { stdio: 'pipe' });
+              log(`Rotation notice sent to ${lastChannel.channel}:${lastChannel.endpoint}`);
+            } catch (notifyErr) {
+              log(`Rotation notice failed (non-fatal): ${notifyErr.message}`);
+            }
+          }
+
           // Reset guardian counters before stopping so the guardian does not
           // treat the intentional stop as a crash and launch a second session
           // while adapter.launch() is still starting the new one.
