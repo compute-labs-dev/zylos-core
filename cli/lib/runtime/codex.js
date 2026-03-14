@@ -259,15 +259,24 @@ export class CodexAdapter extends RuntimeAdapter {
 
     // 4. Schedule a startup dialog check.
     // config.toml suppresses known interactive prompts, but new Codex versions may
-    // introduce new dialogs (e.g. "Introducing GPT-X.Y") before config.toml is
-    // updated.  This check runs 8 s after launch: if the pane still shows a numbered
-    // menu (› 1. / › 2. pattern), we auto-select option 1 to dismiss it.
-    // Safe: at startup no conversation is in progress, so injecting "1\n" is harmless
-    // even if the pattern matches something unexpected.
+    // introduce new dialogs (e.g. "Introducing GPT-X.Y") before config.toml is updated.
+    //
+    // This check runs 8 s after launch. We distinguish startup dialogs from normal
+    // operation by checking the status bar:
+    //   - Codex normal mode:  pane contains "· XX% left ·" (token usage status bar)
+    //   - Startup dialog:     pane has "› N." menu entries but no status bar yet
+    //
+    // Only auto-dismiss when BOTH conditions hold:
+    //   1. pane has a numbered menu (›  1. pattern)
+    //   2. pane does NOT have the normal status bar ("% left ·")
+    // This prevents false positives if Codex is already mid-response and outputs
+    // a list containing "›  1." in the conversation text.
     setTimeout(() => {
       try {
         const pane = execSync(`tmux capture-pane -p -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8' });
-        if (/›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane)) {
+        const hasMenu = /›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane);
+        const hasStatusBar = /\d+%\s+left\s+·/.test(pane);  // e.g. "94% left · ~/zylos"
+        if (hasMenu && !hasStatusBar) {
           execSync(`tmux send-keys -t "${SESSION}" "1" Enter 2>/dev/null`);
         }
       } catch { /* non-fatal — Codex may have exited or session not ready */ }
