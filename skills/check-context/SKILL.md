@@ -17,7 +17,7 @@ Check current context/token usage. The data source depends on the active runtime
 First, check the active runtime:
 
 ```bash
-node -e "try { const c=JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME,'.zylos/config.json'),'utf8')); console.log(c.runtime||'claude'); } catch { console.log('claude'); }"
+node -e "try { const c=JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME,'zylos/.zylos/config.json'),'utf8')); console.log(c.runtime||'claude'); } catch { console.log('claude'); }"
 ```
 
 ### If Claude runtime
@@ -47,7 +47,7 @@ function walk(d,depth){if(depth>3)return;try{fs.readdirSync(d).forEach(f=>{const
 walk(base,0);
 if(!best){console.log('No session found');process.exit(0);}
 const lines=fs.readFileSync(best,'utf8').split('\n').filter(Boolean);
-for(let i=lines.length-1;i>=0;i--){try{const j=JSON.parse(lines[i]);if(j.type==='event_msg'&&j.payload?.type==='token_count'){const u=j.payload.info.total_token_usage;const c=j.payload.info.model_context_window||128000;console.log('used:'+u.input_tokens+' ceiling:'+c+' pct:'+Math.round(u.input_tokens/c*100)+'%');process.exit(0);}}catch{}}
+for(let i=lines.length-1;i>=0;i--){try{const j=JSON.parse(lines[i]);if(j.type==='event_msg'&&j.payload?.type==='token_count'&&j.payload.info.last_token_usage){const u=j.payload.info.last_token_usage.input_tokens;const c=j.payload.info.model_context_window||128000;console.log('used:'+u+' ceiling:'+c+' pct:'+Math.round(u/c*100)+'%');process.exit(0);}}catch{}}
 console.log('No token_count event found');
 "
 ```

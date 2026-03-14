@@ -96,9 +96,12 @@ export class CodexContextMonitor extends ContextMonitorBase {
           if (
             event.type === 'event_msg' &&
             event.payload?.type === 'token_count' &&
-            event.payload?.info?.total_token_usage?.input_tokens != null
+            event.payload?.info?.last_token_usage?.input_tokens != null
           ) {
-            const used = event.payload.info.total_token_usage.input_tokens;
+            // last_token_usage.input_tokens = tokens sent in the last turn =
+            // current context window fill. Do NOT use total_token_usage.input_tokens,
+            // which is cumulative session cost and grows unboundedly across turns.
+            const used = event.payload.info.last_token_usage.input_tokens;
             // model_context_window is the effective ceiling (already multiplied by pct)
             const ceiling = event.payload.info.model_context_window ?? this._getModelCeiling();
             return { used, ceiling };
