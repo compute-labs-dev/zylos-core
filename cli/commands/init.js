@@ -1907,6 +1907,7 @@ export async function initCommand(args) {
           }
         } else if (opts.codexApiKey) {
           if (!quiet) console.log(`    ${dim('API key staged but auth check failed. Continuing...')}`);
+          if (skipConfirm) exitCode = 1;
         } else {
           if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
         }
