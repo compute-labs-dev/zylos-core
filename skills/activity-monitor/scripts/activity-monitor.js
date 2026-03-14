@@ -534,22 +534,25 @@ function sendRecoveryNotice(channel, endpoint) {
  *
  * @returns {{ channel: string, endpoint: string } | null}
  */
-function getLastActiveChannel() {
+async function getLastActiveChannel() {
   try {
     const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
-    // Use tab (CHAR(9)) as separator — safe since channel names and endpoint IDs never contain tabs.
-    const result = execSync(
-      `sqlite3 "${dbPath}" "SELECT channel || CHAR(9) || endpoint_id FROM conversations WHERE direction='in' ORDER BY id DESC LIMIT 1" 2>/dev/null`,
-      { encoding: 'utf8', stdio: 'pipe' }
-    ).trim();
-    if (!result) return null;
-    const tabIdx = result.indexOf('\t');
-    if (tabIdx === -1) return null;
-    const channel = result.slice(0, tabIdx);
-    // Strip msg:... and req:... so we send a new standalone message, not a thread reply.
-    // Matches c4-receive.js normalisation: /\|(msg|req):[^|]+/g
-    const endpoint = result.slice(tabIdx + 1).replace(/\|(msg|req):[^|]+/g, '');
-    return channel && endpoint ? { channel, endpoint } : null;
+    // Use better-sqlite3 (JS layer) — avoids dependency on the sqlite3 system CLI,
+    // which may be absent in some Docker environments.
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db.prepare(
+        "SELECT channel, endpoint_id FROM conversations WHERE direction='in' ORDER BY id DESC LIMIT 1"
+      ).get();
+      if (!row) return null;
+      // Strip msg:... and req:... so we send a new standalone message, not a thread reply.
+      // Matches c4-receive.js normalisation: /\|(msg|req):[^|]+/g
+      const endpoint = row.endpoint_id.replace(/\|(msg|req):[^|]+/g, '');
+      return row.channel && endpoint ? { channel: row.channel, endpoint } : null;
+    } finally {
+      db.close();
+    }
   } catch {
     return null;
   }
@@ -1395,7 +1398,7 @@ function init() {
           // where the agent notifies users before initiating a context rotation.
           // Done here (infrastructure level) rather than relying on the new session to
           // self-report, which was unreliable in practice.
-          const lastChannel = getLastActiveChannel();
+          const lastChannel = await getLastActiveChannel();
           if (lastChannel) {
             try {
               execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
