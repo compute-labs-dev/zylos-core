@@ -1477,6 +1477,7 @@ function parseInitFlags(args) {
     runtime: null,  // 'claude' | 'codex' — set via --runtime flag
     setupToken: null,
     apiKey: null,
+    codexApiKey: null,
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
@@ -1515,6 +1516,7 @@ function parseInitFlags(args) {
         else if (arg === '--runtime') opts.runtime = val;
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
+        else if (arg === '--codex-api-key') opts.codexApiKey = val;
         else if (arg === '--domain') opts.domain = val;
         else if (arg === '--web-password') opts.webPassword = val;
         break;
@@ -1562,6 +1564,9 @@ function resolveFromEnv(opts) {
   }
   if (opts.webPassword === null) {
     opts.webPassword = process.env.ZYLOS_WEB_PASSWORD || process.env.WEB_CONSOLE_PASSWORD || null;
+  }
+  if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
+    opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
   }
   // TZ: do NOT pick up ambient TZ from the environment.
   // Docker containers often have TZ=UTC set by default, which would silently
@@ -1635,6 +1640,7 @@ Options:
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
+  --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
@@ -1647,7 +1653,7 @@ Non-interactive mode:
 
 Environment variables:
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
-  ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
+  OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
 
@@ -1811,6 +1817,7 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
+  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
 
   if (selectedRuntime === 'codex') {
     // ── Step 5 (Codex): install ───────────────────────────────────────────
@@ -1839,6 +1846,16 @@ export async function initCommand(args) {
       codexAuthenticated = isCodexAuthenticated();
       if (codexAuthenticated) {
         if (!quiet) console.log(`  ${success('Codex authenticated')}`);
+      } else if (opts.codexApiKey) {
+        // API key provided via flag/env — stage for post-template write, set env for immediate auth check
+        process.env.OPENAI_API_KEY = opts.codexApiKey;
+        pendingCodexApiKey = opts.codexApiKey;
+        codexAuthenticated = isCodexAuthenticated();
+        if (codexAuthenticated) {
+          if (!quiet) console.log(`  ${success('Codex API key accepted')}`);
+        } else {
+          if (!quiet) console.log(`  ${warn('Codex API key provided but auth check failed. Continuing...')}`);
+        }
       } else {
         if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
         if (!skipConfirm) {
@@ -2111,6 +2128,9 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
+    if (pendingCodexApiKey) {
+      saveCodexApiKeyToEnv(pendingCodexApiKey);
+    }
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2205,6 +2225,9 @@ export async function initCommand(args) {
   }
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
+  }
+  if (pendingCodexApiKey) {
+    saveCodexApiKeyToEnv(pendingCodexApiKey);
   }
 
   // Step 8: Configure timezone
