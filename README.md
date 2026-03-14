@@ -31,7 +31,7 @@ Supports Claude Code (Anthropic) and Codex (OpenAI).
 
 ## Quick Start
 
-**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription (or [OpenAI](https://platform.openai.com) API key for Codex).
+**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription (or [OpenAI Codex](https://github.com/openai/codex) as an alternative runtime).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
