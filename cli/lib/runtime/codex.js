@@ -266,8 +266,8 @@ export class CodexAdapter extends RuntimeAdapter {
         const authPath = path.join(codexDir, 'auth.json');
         let authContent = {};
         try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch { }
-        // Only write if auth.json is missing or has no key (don't overwrite native login)
-        if (!authContent.OPENAI_API_KEY && authContent.auth_mode !== 'chatgpt') {
+        // Sync if key has changed or is missing; skip only for native chatgpt/OAuth login
+        if (authContent.OPENAI_API_KEY !== apiKey && authContent.auth_mode !== 'chatgpt') {
           fs.mkdirSync(codexDir, { recursive: true });
           authContent.auth_mode = 'apikey';
           authContent.OPENAI_API_KEY = apiKey;
