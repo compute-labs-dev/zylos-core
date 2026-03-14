@@ -113,6 +113,14 @@ Triggers:
 - Recalling recent events → read `sessions/current.md`
 - Searching for historical info → check `archive/`
 
+## Runtime Switch
+
+When the C4 conversation history shows that a runtime switch just occurred (the previous agent said it was switching and then stopped responding), you are the newly-started runtime. In this case, your **first proactive message** to the user via C4 should confirm you are ready and that nothing was lost. Be warm and direct. Example:
+
+> "你好！我现在运行在 Codex 上了，之前的记忆和对话都完整保留，继续聊吧！"
+
+Adapt the runtime name (Codex / Claude Code) to match what was switched to. Do not repeat the transition details — just confirm you are here and ready.
+
 ## Communication
 
 All external communication goes through C4 Communication Bridge.

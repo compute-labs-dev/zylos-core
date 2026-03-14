@@ -42,8 +42,8 @@ Wait for the user's confirmation before running the command.
 
 Credentials are stored in both `~/.codex/auth.json` and `~/zylos/.env` to ensure auth persists across restarts.
 
-**After the switch command completes**, tell the user the new runtime will be ready in ~10 seconds and they can continue chatting here — no action needed on their end. Do NOT mention `zylos attach` (that is for terminal users only). Example:
-> "切换完成！Codex 大约 10 秒后就绪，直接在这里继续聊天即可。"
+**After the switch command completes**, send a brief transition notice — keep it short, as the new runtime will send its own ready message. Do NOT mention `zylos attach` (that is for terminal users only). Example:
+> "好的，正在切换到 Codex，约 10 秒后就绪。"
 
 ### Heartbeat
 
