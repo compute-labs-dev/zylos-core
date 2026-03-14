@@ -1506,6 +1506,7 @@ function parseInitFlags(args) {
       case '--runtime':
       case '--setup-token':
       case '--api-key':
+      case '--codex-api-key':
       case '--domain':
       case '--web-password': {
         const val = args[++i];
