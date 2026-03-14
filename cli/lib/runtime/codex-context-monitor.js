@@ -3,8 +3,10 @@
  *
  * Data sources (in priority order):
  *   1. Active JSONL rollout file — scan tail for last `event_msg:token_count` event.
- *      Fields: info.total_token_usage.input_tokens (used) + info.model_context_window (ceiling).
- *      Note: model_context_window in the event is already the effective ceiling
+ *      Fields: info.last_token_usage.input_tokens (current window fill) + info.model_context_window (ceiling).
+ *      Note: last_token_usage.input_tokens = tokens sent in the last turn = current context fill.
+ *      total_token_usage.input_tokens is cumulative session cost — do NOT use it for context monitoring.
+ *      model_context_window in the event is already the effective ceiling
  *      (context_window × effective_context_window_percent / 100).
  *   2. SQLite state_5.sqlite fallback — threads.tokens_used + models_cache.json ceiling.
  *
