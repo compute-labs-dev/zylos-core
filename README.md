@@ -25,13 +25,13 @@ LLMs are geniuses — but they wake up with amnesia every session. No memory of 
 
 Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
-More LLMs support are on the way.
+Supports Claude Code (Anthropic) and Codex (OpenAI).
 
 ---
 
 ## Quick Start
 
-**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription.
+**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription (or [OpenAI](https://platform.openai.com) API key for Codex).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
@@ -67,8 +67,10 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 |------|-------------|---------|
 | `-y`, `--yes` | Force non-interactive mode (skip all prompts) | Auto-detected |
 | `-q`, `--quiet` | Minimal output | Off |
+| `--runtime <name>` | AI runtime: `claude` or `codex` | `claude` |
 | `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication) (starts with `sk-ant-oat`) | — |
 | `--api-key <key>` | Anthropic API key (starts with `sk-ant-`) | — |
+| `--codex-api-key <key>` | OpenAI API key for Codex runtime (starts with `sk-`) | — |
 | `--timezone <tz>` | [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `Asia/Shanghai`, `America/New_York`, `Europe/London` | System default |
 | `--domain <domain>` | Domain for Caddy reverse proxy, e.g. `agent.example.com` | None |
 | `--https` / `--no-https` | Enable or disable HTTPS | `--https` when domain is set |
@@ -81,8 +83,10 @@ Flags can also be set via environment variables. Resolution order: CLI flag > en
 
 | Environment Variable | Equivalent Flag |
 |---------------------|-----------------|
+| `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
+| `OPENAI_API_KEY` | `--codex-api-key` |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
@@ -164,10 +168,10 @@ This works from Windows, ChromeOS, or any platform that can run Claude Code loca
 </details>
 
 `zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
-1. Install missing tools (tmux, git, PM2, Claude Code)
-2. Set up Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
+1. Install missing tools (tmux, git, PM2, Claude Code or Codex)
+2. Set up authentication (Claude: browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication); Codex: API key or device auth)
 3. Create the `~/zylos/` directory with memory, skills, and services
-4. Start all background services and launch Claude in a tmux session
+4. Start all background services and launch your AI agent in a tmux session
 
 **Talk to your agent:**
 
@@ -207,8 +211,8 @@ graph TB
         HTTP["HTTP Layer<br/>(Caddy · file sharing · HTTPS)"]
     end
 
-    subgraph Brain["🧠 Claude Code — The Brain"]
-        CC["Claude Code<br/>(in tmux session)"]
+    subgraph Brain["🧠 AI Runtime — The Brain"]
+        CC["Claude Code / Codex<br/>(in tmux session)"]
     end
 
     TG & LK & WC --> C4
@@ -260,9 +264,9 @@ No third-party monitoring tools needed. Zylos includes native crash recovery, he
 
 Other frameworks charge per API token. Community reports show monthly bills of $500–$3,600 for always-on agents. Zylos runs on your Claude subscription — flat rate, no per-token billing. Same AI capabilities, a fraction of the cost.
 
-### Powered by Claude Code
+### Powered by Best-in-Class AI Runtimes
 
-Zylos builds on Claude Code — Anthropic's official AI agent runtime. When Anthropic ships new capabilities like agent teams, your AI gets them automatically. And because Claude Code can program, your AI writes new skills, integrates services, and evolves with your needs.
+Zylos supports Claude Code (Anthropic) and Codex (OpenAI) as interchangeable AI runtimes. Start with one, switch to the other anytime with `zylos runtime codex` — your memory, skills, and channels are preserved. When AI providers ship new capabilities, your agent benefits automatically. And because both runtimes can program, your AI writes new skills, integrates services, and evolves with your needs.
 
 ---
 
@@ -287,7 +291,8 @@ All channels connect through the C4 communication bridge. To add a new channel (
 
 ```bash
 zylos init                    # Set up Zylos environment
-zylos attach                  # Attach to the Claude tmux session
+zylos attach                  # Attach to the agent tmux session
+zylos runtime <name>          # Switch AI runtime (claude or codex)
 zylos doctor                  # Diagnose and auto-repair installation
 zylos status                  # Check running services
 zylos logs [service]          # View service logs
