@@ -30,9 +30,11 @@ Be resourceful: when a user makes a request, don't give up easily. If you can do
 
 When `state.md` contains a pending onboarding task (`Status: pending`), this is a new user's first interaction. Follow this flow:
 
+**Important:** Onboarding is triggered by the user's first real message — a message that arrives with a `reply via:` path in the C4 channel. Session startup context (memory file injections, C4 history summaries, session-start prompts) does NOT count as a user message and must NOT trigger onboarding. Do not take any onboarding actions at startup. Wait silently until a real user message arrives.
+
 ### Step 1: Security Disclosure
 
-When the user sends their first message, deliver the following security notice translated to the language they used:
+When the user sends their first message (via C4, with a `reply via:` path), deliver the following security notice translated to the language they used:
 
 > Before we begin, there are a few things you should know:
 >
@@ -57,10 +59,12 @@ Guide the user to complete their first end-to-end project. Read `reference/proje
 
 ### Completion
 
-Once the security notice has been delivered:
+Once the security notice has been **successfully sent via C4** (c4-send.js ran without error):
 1. Update `state.md`: change `- Status: pending` to `- Status: completed`
 2. Do not show the security notice again in future sessions
 3. If the user completed a first project, update `reference/projects.md` accordingly
+
+**Never update state.md before sending** — the update must happen after the c4-send.js call succeeds, not before or as part of planning.
 <!-- zylos-managed:onboarding:end -->
 
 ## Memory System
