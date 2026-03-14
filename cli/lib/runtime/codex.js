@@ -251,38 +251,39 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
-    if (_tmuxHasSession()) {
-      // Existing session — send command via tmux.
-      // Also inject API keys from .env so that sessions created before credentials
-      // were configured (e.g. on first boot before zylos init completes) can auth.
-      let envSnippet = '';
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
-        const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
-        const parts = [];
-        if (openaiMatch) parts.push(`export OPENAI_API_KEY=${openaiMatch[1].trim()}`);
-        if (codexApiMatch) parts.push(`export CODEX_API_KEY=${codexApiMatch[1].trim()}`);
-        if (parts.length > 0) envSnippet = parts.join('; ') + '; ';
-      } catch { /* .env absent or no keys — rely on native login */ }
+    // 3.5. Sync API key from ~/zylos/.env → ~/.codex/auth.json before launch.
+    // Codex only reads auth.json for credentials — it does NOT check OPENAI_API_KEY
+    // env vars (support was deliberately removed in Codex CLI). If the key was added
+    // to .env after init (e.g. user fixed a bad key manually), this ensures auth.json
+    // is up-to-date before Codex starts.
+    try {
+      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+      const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
+      const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
+      const apiKey = (openaiMatch || codexApiMatch)?.[1]?.trim();
+      if (apiKey) {
+        const codexDir = path.join(os.homedir(), '.codex');
+        const authPath = path.join(codexDir, 'auth.json');
+        let authContent = {};
+        try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch { }
+        // Only write if auth.json is missing or has no key (don't overwrite native login)
+        if (!authContent.OPENAI_API_KEY && authContent.auth_mode !== 'chatgpt') {
+          fs.mkdirSync(codexDir, { recursive: true });
+          authContent.auth_mode = 'apikey';
+          authContent.OPENAI_API_KEY = apiKey;
+          fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
+        }
+      }
+    } catch { /* non-fatal — Codex will handle auth at startup */ }
 
+    if (_tmuxHasSession()) {
       const cmd = tmpPrompt
-        ? `${envSnippet}cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
-        : `${envSnippet}cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
+        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
-      // New tmux session — inject API keys from ~/zylos/.env via tmux -e flags.
-      // Using -e (same as PATH) is the most reliable approach: no shell sourcing
-      // needed, tmux handles env var propagation directly to the session.
       const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
-        const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
-        if (openaiMatch) tmuxArgs.push('-e', `OPENAI_API_KEY=${openaiMatch[1].trim()}`);
-        if (codexApiMatch) tmuxArgs.push('-e', `CODEX_API_KEY=${codexApiMatch[1].trim()}`);
-      } catch { /* .env absent or no keys — Codex will use native login */ }
 
       const promptSnippet = tmpPrompt
         ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
