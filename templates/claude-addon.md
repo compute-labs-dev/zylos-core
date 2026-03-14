@@ -21,7 +21,7 @@ When the user asks to switch to the Codex runtime, run:
 zylos runtime codex
 ```
 
-This auto-installs Codex if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Your Claude Code session will be terminated and Codex will start.
+This auto-installs Codex if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Your Claude Code session will be terminated and Codex will start. Confirm to the user before running.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
