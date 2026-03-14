@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
 
@@ -22,7 +22,7 @@ import { commandExists } from './shell-utils.js';
  */
 export function installGlobalPackage(pkg) {
   try {
-    execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
+    execFileSync('npm', ['install', '-g', pkg], { stdio: 'pipe', timeout: 120000 });
     return true;
   } catch {
     return false;
@@ -113,9 +113,7 @@ export function approveApiKey(keyOrToken) {
       try {
         const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
         config.lastOnboardingVersion = ver;
-      } catch {
-        config.lastOnboardingVersion = '2.1.59';
-      }
+      } catch { /* omit if claude binary not yet available */ }
     }
     if (!config.projects) config.projects = {};
     const projectPath = path.resolve(ZYLOS_DIR);
