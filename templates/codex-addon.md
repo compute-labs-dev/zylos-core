@@ -10,7 +10,12 @@ When the user asks to switch to the Claude runtime, run:
 zylos runtime claude
 ```
 
-This auto-installs Claude if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Your Codex session will be terminated and Claude will start. Confirm to the user before running.
+This auto-installs Claude if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Memory and context are fully preserved — the switch is seamless and the new runtime picks up right where you left off.
+
+Before running, send the user a friendly confirmation message via C4. Example:
+> "好的，马上切换到 Claude 运行时。记忆和上下文完整保留，切换后可以无缝继续。大约需要 10 秒重启，稍等一下。"
+
+Then run the command immediately after sending (do not wait for a reply — this is an announcement, not a blocking prompt).
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
