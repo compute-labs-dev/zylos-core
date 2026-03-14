@@ -1870,15 +1870,15 @@ export async function initCommand(args) {
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
       if (opts.codexApiKey) {
-        // Stage API key immediately — persists to auth.json before any template operations,
-        // mirrors Claude's saveApiKey → settings.json pattern.
-        saveCodexApiKey(opts.codexApiKey); // auth.json + process.env (immediate persistence)
-        pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
-
-        // Verify key against OpenAI API: 200=valid, 401=invalid, null=network unreachable
+        // Verify first, then save — mirrors Claude's verifyApiKey → saveApiKey pattern.
+        // Do NOT save before verifying: a bad key written to auth.json causes isCodexAuthenticated()
+        // to report "authenticated" on subsequent zylos init runs (codex login status only checks
+        // key presence, not validity).
         if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
         const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
         if (verifyResult === true) {
+          saveCodexApiKey(opts.codexApiKey); // auth.json + process.env
+          pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
           codexAuthenticated = true;
           if (!quiet) console.log(`  ${success('Codex API key verified')}`);
         } else if (verifyResult === false) {
@@ -1886,7 +1886,9 @@ export async function initCommand(args) {
           console.error(`    ${dim('Check your key at platform.openai.com')}`);
           if (skipConfirm) exitCode = 1;
         } else {
-          // null = network unreachable — cannot verify, proceed and let Codex fail at runtime
+          // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
+          saveCodexApiKey(opts.codexApiKey); // auth.json + process.env
+          pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
           if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
           codexAuthenticated = true;
         }
