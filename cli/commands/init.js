@@ -1162,14 +1162,13 @@ function setupPm2Startup() {
 
     console.log(`  ${success(`PM2 boot auto-start configured (${unitName})`)}`);
     console.log(`    ${dim(`Unit: ${unitPath}`)}`);
+    warnIfForeignCgroup();
   } catch (err) {
     console.log(`  ${warn(`PM2 boot auto-start setup failed: ${err.message}`)}`);
     console.log(`    ${dim('Fix manually: pm2 startup (then run the sudo command it outputs)')}`);
   } finally {
     try { fs.unlinkSync(tempUnitPath); } catch { /* ignore */ }
   }
-
-  warnIfForeignCgroup();
 }
 
 /**
