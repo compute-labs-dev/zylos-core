@@ -1155,8 +1155,7 @@ function setupPm2Startup() {
       if (result.status !== 0) {
         console.log(`  ${warn('PM2 boot auto-start: sudo did not complete.')}`);
         console.log(`    This is optional — Zylos works fine without it.`);
-        console.log(`    ${cyan('To enable later, install the unit manually:')}`);
-        console.log(`      ${dim(tempUnitPath)}`);
+        console.log(`    ${cyan('To enable later, run:')} ${bold('zylos init')}`);
         return;
       }
     }
