@@ -22,7 +22,7 @@ import {
   saveApiKeyToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
-  saveCodexApiKeyToEnv,
+  saveCodexApiKey,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -96,7 +96,7 @@ function applyCredentials(target, creds) {
     }
   } else if (target === 'codex') {
     if (creds.apiKey) {
-      return saveCodexApiKeyToEnv(creds.apiKey);
+      return saveCodexApiKey(creds.apiKey);
     }
   }
   return false;
