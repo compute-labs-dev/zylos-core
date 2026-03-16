@@ -15,7 +15,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
@@ -92,13 +95,13 @@ export class CodexAdapter extends RuntimeAdapter {
 
     if (!apiKey) {
       // No key found anywhere — check `codex login status` for OAuth/device auth.
+      // Use async execFile — spawnSync would block the event loop during the call.
       try {
-        const result = spawnSync(CODEX_BIN, ['login', 'status'], {
+        await execFileAsync(CODEX_BIN, ['login', 'status'], {
           stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
-        if (result.error) throw result.error;
-        if (result.status === 0) return { ok: true, reason: 'codex_login_status' };
-      } catch { /* binary missing or other error */ }
+        return { ok: true, reason: 'codex_login_status' };
+      } catch { /* binary missing, not logged in, or other error */ }
       return { ok: false, reason: 'no_api_key_and_not_logged_in' };
     }
 
