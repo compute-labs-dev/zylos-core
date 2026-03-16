@@ -15,7 +15,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
@@ -54,47 +57,67 @@ export class CodexAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Check if Codex CLI is authenticated.
+   * Live auth check: resolves the API key (from env vars, .env, or auth.json) then
+   * issues a real HTTP probe to the OpenAI API. Detects revoked/expired keys that
+   * local file checks cannot catch.
    *
-   * Auth is accepted via two paths (checked in order):
-   *   1. Environment variables: OPENAI_API_KEY or CODEX_API_KEY present — Codex
-   *      reads these directly, so no persistent login is needed. This covers
-   *      Docker / server deployments where credentials are injected via env.
-   *   2. `codex login status` exits 0 — interactive / OAuth login path.
+   * Return values:
+   *   { ok: true }  — 200 OK, or uncertain outcome (network error, timeout, non-401
+   *                   HTTP error) — don't block restart in uncertain cases
+   *   { ok: false } — explicit 401 Unauthorized from OpenAI API
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
-    // Path 1: env-var credentials (Docker / server deployments).
-    if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
-      return { ok: true, reason: 'env-var auth (OPENAI_API_KEY / CODEX_API_KEY)' };
+    // Resolve API key: env vars take precedence, then .env file, then auth.json.
+    let apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || '';
+
+    if (!apiKey) {
+      try {
+        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+        // Check both keys independently (same as launch()) — a single alternation regex
+        // only captures the first match and silently ignores the second key.
+        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
+        const codexMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
+        if (openaiMatch) apiKey = openaiMatch[1].trim();
+        if (!apiKey && codexMatch) apiKey = codexMatch[1].trim();
+      } catch { /* .env absent */ }
     }
 
-    // Path 2: API key in ~/zylos/.env (covers `zylos init` / `zylos status` where
-    // the key is stored in .env but not exported to the calling process's env).
-    try {
-      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) {
-        return { ok: true, reason: 'OPENAI_API_KEY / CODEX_API_KEY in .env' };
-      }
-    } catch { /* .env absent — not an auth path */ }
+    if (!apiKey) {
+      try {
+        const authJson = JSON.parse(fs.readFileSync(
+          path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
+        ));
+        apiKey = authJson?.apiKey || authJson?.token || '';
+      } catch { /* auth.json absent or malformed */ }
+    }
 
-    // Path 3: `codex login status` — authoritative check covering all native auth methods
-    // (API key via auth.json, device auth, OAuth). More reliable than inspecting auth.json
-    // directly, which can't distinguish auth_mode or detect revoked/expired keys.
+    if (!apiKey) {
+      // No key found anywhere — check `codex login status` for OAuth/device auth.
+      // Use async execFile — spawnSync would block the event loop during the call.
+      try {
+        await execFileAsync(CODEX_BIN, ['login', 'status'], {
+          stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
+        });
+        return { ok: true, reason: 'codex_login_status' };
+      } catch { /* binary missing, not logged in, or other error */ }
+      return { ok: false, reason: 'no_api_key_and_not_logged_in' };
+    }
+
+    // Have API key — live HTTP probe to OpenAI API.
     try {
-      const result = spawnSync(CODEX_BIN, ['login', 'status'], {
-        stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
+      const res = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10_000),
       });
-      // spawnSync sets result.error (status=null) when the binary is missing —
-      // it does NOT throw, so we must check explicitly.
-      if (result.error) throw result.error;
-      if (result.status === 0) {
-        return { ok: true, reason: 'codex login status: authenticated' };
-      }
-      return { ok: false, reason: 'not logged in (run: codex login or set OPENAI_API_KEY)' };
-    } catch (e) {
-      return { ok: false, reason: e.message };
+      if (res.status === 200) return { ok: true, reason: 'http_probe_200' };
+      if (res.status === 401) return { ok: false, reason: 'http_probe_401' };
+      // 429 (rate limit), 5xx, etc. — uncertain, don't block restart.
+      return { ok: true, reason: `http_probe_uncertain_${res.status}` };
+    } catch {
+      // Network error or timeout — uncertain, don't block restart.
+      return { ok: true, reason: 'http_probe_network_error_skip' };
     }
   }
 

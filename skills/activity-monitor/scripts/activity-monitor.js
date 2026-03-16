@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v21 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v22 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v22 changes (service recovery — auth + periodic probe):
+ *   - checkAuth() in ClaudeAdapter/CodexAdapter is now a live probe (CLI subprocess / HTTP)
+ *     instead of local file checks — detects revoked/expired tokens
+ *   - startAgent() notifies owner (via C4 control enqueue) when auth fails, rate-limited to
+ *     1 notification per hour to avoid spam
+ *   - Replaced stuck detection (indirect activity signals → 300s threshold → probe) with
+ *     a fixed 5-min periodic probe gated on active_tools === 0 (busy = hook counter > 0)
+ *   - Guardian now calls engine.canRestart() instead of reading engine.health directly —
+ *     separates Guardian (process liveness) from HeartbeatEngine (functional liveness)
  *
  * v21 changes (multi-runtime support — #311):
  *   - RuntimeAdapter abstraction: getActiveAdapter() reads runtime from config.json
@@ -141,16 +151,15 @@ const MAX_RESTART_DELAY = 60;
 const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
 
 // Heartbeat liveness config (v3)
-const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
+const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; active_tools-stuck edge case fallback)
 const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
 const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
 const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions before probing
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
-// Stuck detection config
-const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
-const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
+// Periodic probe config (replaces stuck detection)
+const PERIODIC_PROBE_INTERVAL = 300; // 5 min fixed-interval probe when agent is idle
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -195,8 +204,10 @@ let stableRunningSince = 0;
 let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
-let lastStuckProbeAt = 0;
+let lastPeriodicProbeAt = 0;
 let lastDeadApiPid = null;
+let authFailedNotifiedAt = 0;
+let startAgentInProgress = false;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
@@ -392,17 +403,38 @@ function enqueueStartupControl() {
  * then enqueues the startup control prompt if no session-start hook is installed.
  */
 async function startAgent() {
-  if (isMaintenanceRunning()) {
-    log('Guardian: Maintenance script detected, waiting for completion...');
-    waitForMaintenance();
-  }
+  // Prevent concurrent calls: auth check is async (up to 20s), so two ticks could
+  // overlap. Guard ensures only one startAgent() runs at a time.
+  if (startAgentInProgress) return;
+  startAgentInProgress = true;
 
-  // Skip startup if not authenticated — avoids interactive login prompts in tmux
-  const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
-  if (!authResult.ok) {
-    log(`Guardian: ${adapter.displayName} not authenticated (${authResult.reason ?? 'unknown'}), skipping startup`);
-    return;
-  }
+  try {
+    if (isMaintenanceRunning()) {
+      log('Guardian: Maintenance script detected, waiting for completion...');
+      waitForMaintenance();
+    }
+
+    // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
+    const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
+    if (!authResult.ok) {
+      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart`);
+      const now = Math.floor(Date.now() / 1000);
+      if ((now - authFailedNotifiedAt) > 3600) {
+        authFailedNotifiedAt = now;
+        runC4Control([
+          'enqueue',
+          '--content', `Authentication failed for ${adapter.displayName} (${authResult.reason ?? 'unknown'}). Agent cannot restart. Please check your API key or login credentials.`,
+          '--priority', '1',
+        ]);
+      }
+      return;
+    }
+
+    // Auth passed — consume the restart budget and mark startup in progress.
+    // Done here (after auth check) so auth failures don't consume backoff budget.
+    consecutiveRestarts += 1;
+    startupGrace = 30;
+    notRunningCount = 0;
 
   log(`Guardian: Starting ${adapter.displayName}...`);
 
@@ -427,6 +459,9 @@ async function startAgent() {
   // wait for launch to complete before enqueueing).
   if (!hasStartupHook()) {
     enqueueStartupControl();
+  }
+  } finally {
+    startAgentInProgress = false;
   }
 }
 
@@ -1097,15 +1132,13 @@ async function monitorLoop() {
       log('State: OFFLINE (tmux session not found)');
     }
 
-    // Don't restart while rate-limited — restarting can't fix rate limits.
-    // The engine will handle recovery via cooldown timer.
+    // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
+    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
+    // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
-      consecutiveRestarts += 1;
-      log(`Guardian: Session not found for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+    if (engine.canRestart() && notRunningCount >= restartDelay) {
+      log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
       startAgent();
-      startupGrace = 30;
-      notRunningCount = 0;
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1147,14 +1180,13 @@ async function monitorLoop() {
       log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
     }
 
-    // Don't restart while rate-limited — restarting can't fix rate limits.
+    // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
+    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
+    // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
-      consecutiveRestarts += 1;
-      log(`Guardian: Agent not running for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+    if (engine.canRestart() && notRunningCount >= restartDelay) {
+      log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
       startAgent();
-      startupGrace = 30;
-      notRunningCount = 0;
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1261,16 +1293,13 @@ async function monitorLoop() {
     } catch { /* best-effort */ }
   }
 
-  // Stuck detection: if no observable activity from any source for STUCK_THRESHOLD,
-  // trigger an immediate heartbeat probe with a shorter timeout.
+  // Periodic probe: fixed 5-min interval, skipped when agent is busy (active_tools > 0).
+  // Replaces indirect-signal stuck detection. Catches auth failures and frozen-but-alive
+  // agents regardless of whether activity signals are being refreshed.
   if (engine.health === 'ok') {
-    const lastAnyActivity = Math.max(activity, apiUpdatedSec);
-    const stuckSeconds = currentTime - lastAnyActivity;
-
-    if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
-      const ok = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
-      // Approach C: full cooldown on success, short retry (60s) on failure
-      lastStuckProbeAt = ok ? currentTime : currentTime - STUCK_PROBE_COOLDOWN + 60;
+    if (activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
+      const ok = engine.requestImmediateProbe('periodic_5min');
+      if (ok) lastPeriodicProbeAt = currentTime;
     }
   }
 
@@ -1459,7 +1488,7 @@ try {
   console.error(`[activity-monitor] Fatal: init() failed: ${err.message}`);
   process.exit(1);
 }
-log(`=== Activity Monitor Started (v21 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v22 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + PeriodicProbe + LiveAuth + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 // Use self-scheduling loop instead of setInterval to prevent concurrent
 // invocations: async monitorLoop + setInterval can overlap if isRunning()
