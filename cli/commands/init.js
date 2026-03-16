@@ -1954,20 +1954,25 @@ export async function initCommand(args) {
         if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
         const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
         if (verifyResult === true) {
-          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
-
-          codexAuthenticated = true;
-          if (!quiet) console.log(`  ${success('Codex API key verified')}`);
+          if (saveCodexApiKey(opts.codexApiKey)) {
+            codexAuthenticated = true;
+            if (!quiet) console.log(`  ${success('Codex API key verified and saved')}`);
+          } else {
+            console.error(`  ${error('Failed to save Codex API key to auth.json.')}`);
+            if (skipConfirm) exitCode = 1;
+          }
         } else if (verifyResult === false) {
           console.error(`  ${error('Codex API key is invalid or could not be verified.')}`);
           console.error(`    ${dim('Check your key at platform.openai.com')}`);
           if (skipConfirm) exitCode = 1;
         } else {
           // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
-          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
-
-          if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
-          codexAuthenticated = true;
+          if (saveCodexApiKey(opts.codexApiKey)) {
+            if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
+            codexAuthenticated = true;
+          } else {
+            console.error(`  ${error('Failed to save Codex API key to auth.json.')}`);
+          }
         }
       } else {
         codexAuthenticated = isCodexAuthenticated();
@@ -2024,7 +2029,7 @@ export async function initCommand(args) {
               }
             }
           } else {
-            if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
+            if (!quiet) console.log(`    ${dim('Run "codex login --device-auth" or re-run with "--codex-api-key <key>" to authenticate.')}`);
           }
         }
       }
