@@ -69,7 +69,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * Return values:
    *   { ok: true }  — probe succeeded (exit 0) or outcome is uncertain (network error,
    *                   timeout, rate limit) — don't block restart in uncertain cases
-   *   { ok: false } — explicit auth rejection (401 / invalid key in stderr/stdout)
+   *   { ok: false } — Anthropic API returned authentication_error (401 auth failure,
+   *                   covers both API key and OAuth token expiry)
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
@@ -99,10 +100,14 @@ export class ClaudeAdapter extends RuntimeAdapter {
     } catch (err) {
       // execFile throws on non-zero exit; inspect output to distinguish auth failure
       // from transient failures (timeout, network error, rate limit, etc.).
+      //
+      // Anthropic API auth failures always include {"type":"authentication_error"} in the
+      // JSON error body — regardless of whether it's an API key or OAuth token. This is
+      // a structured field from the API, not free-form text, so it's stable across CLI versions.
+      // Rate limits produce "rate_limit_error", server errors produce "api_error" — no overlap.
       const output = (err.stdout ?? '') + (err.stderr ?? '');
-      const isAuthFailure = /401|unauthorized|invalid.{0,20}(api.?key|token)|(api.?key|token).{0,20}invalid|authentication.?error/i.test(output);
-      if (isAuthFailure) {
-        return { ok: false, reason: 'cli_probe_401' };
+      if (output.includes('authentication_error')) {
+        return { ok: false, reason: 'cli_probe_authentication_error' };
       }
       // Uncertain outcome — proceed with restart rather than blocking on a transient error.
       return { ok: true, reason: `cli_probe_uncertain` };
