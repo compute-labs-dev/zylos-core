@@ -342,6 +342,31 @@ export async function upgradeComponent(args) {
 }
 
 /**
+ * Validate that a provided --temp-dir exists and contains a valid package.
+ * Prints/logs the error if invalid. Returns { valid: boolean }.
+ */
+function validateTempDir(tempDir, { jsonOutput, action, component }) {
+  const checks = [
+    { test: () => fs.existsSync(tempDir), msg: `Provided temp dir does not exist: ${tempDir}` },
+    { test: () => fs.existsSync(path.join(tempDir, 'package.json')), msg: `Provided temp dir is missing package.json (empty or invalid): ${tempDir}` },
+  ];
+  for (const { test, msg } of checks) {
+    if (!test()) {
+      if (jsonOutput) {
+        const errOutput = { action, success: false, error: msg };
+        if (component) errOutput.component = component;
+        errOutput.reply = formatC4Reply('error', { message: msg });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      return { valid: false };
+    }
+  }
+  return { valid: true };
+}
+
+/**
  * Handle --check flag: check for updates only (no lock needed).
  * Also fetches changelog, detects local changes, and runs Claude eval for a complete preview.
  * When --branch is specified, downloads from branch and reads version from its package.json.
@@ -540,29 +565,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      // Validate provided temp dir exists and has valid package contents
-      if (!fs.existsSync(tempDir)) {
-        const msg = `Provided temp dir does not exist: ${tempDir}`;
-        if (jsonOutput) {
-          const errOutput = { action: 'upgrade', component, success: false, error: msg };
-          errOutput.reply = formatC4Reply('error', { message: msg });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${msg}`);
-        }
-        return false;
-      }
-      if (!fs.existsSync(path.join(tempDir, 'package.json'))) {
-        const msg = `Provided temp dir is missing package.json (empty or invalid): ${tempDir}`;
-        if (jsonOutput) {
-          const errOutput = { action: 'upgrade', component, success: false, error: msg };
-          errOutput.reply = formatC4Reply('error', { message: msg });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${msg}`);
-        }
-        return false;
-      }
+      if (!validateTempDir(tempDir, { jsonOutput, action: 'upgrade', component }).valid) return false;
       if (!jsonOutput) {
         console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
       }
@@ -1002,29 +1005,7 @@ async function upgradeSelfCore({ providedTempDir, branch, mode = 'merge' } = {})
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      // Validate provided temp dir exists and has valid package contents
-      if (!fs.existsSync(tempDir)) {
-        const msg = `Provided temp dir does not exist: ${tempDir}`;
-        if (jsonOutput) {
-          const errOutput = { action: 'self_upgrade', success: false, error: msg };
-          errOutput.reply = formatC4Reply('error', { message: msg });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${msg}`);
-        }
-        return false;
-      }
-      if (!fs.existsSync(path.join(tempDir, 'package.json'))) {
-        const msg = `Provided temp dir is missing package.json (empty or invalid): ${tempDir}`;
-        if (jsonOutput) {
-          const errOutput = { action: 'self_upgrade', success: false, error: msg };
-          errOutput.reply = formatC4Reply('error', { message: msg });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${msg}`);
-        }
-        return false;
-      }
+      if (!validateTempDir(tempDir, { jsonOutput, action: 'self_upgrade' }).valid) return false;
       if (!jsonOutput) {
         console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
       }
