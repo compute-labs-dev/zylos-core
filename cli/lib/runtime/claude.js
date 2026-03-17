@@ -62,29 +62,36 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Live auth check. Two-stage:
+   * Live auth check. Three-stage:
    *   1. `claude auth status` (fast, local, structured JSON) — detects missing/no credentials
    *      without a network round-trip. Guards against `claude -p ping` exiting 0 with
    *      "Not logged in" message (observed in Claude Code v2.1.76+).
-   *   2. `claude -p ping --max-turns 1` (live API probe) — detects revoked/expired tokens
-   *      that local file checks cannot catch.
+   *   2. HTTP probe (GET /v1/models) — when .env has ANTHROPIC_API_KEY or
+   *      CLAUDE_CODE_OAUTH_TOKEN. Validates the key directly against the Anthropic API with
+   *      a 5s timeout. Avoids the 30s ping hang in firewalled/Docker environments where a
+   *      fake key passes Stage 1 (claude auth status sees env var → loggedIn:true) but
+   *      Stage 3 ping times out → err.killed → false-positive ok:true.
+   *   3. `claude -p ping --max-turns 1` (live CLI probe) — fallback when no .env key is
+   *      present (e.g. credentials stored only in ~/.claude/).
    *
    * Return values:
-   *   { ok: true }  — probe succeeded (exit 0) or outcome is uncertain (network error,
-   *                   timeout, rate limit) — don't block restart in uncertain cases
-   *   { ok: false } — no credentials found, or Anthropic API returned authentication_error
+   *   { ok: true }  — probe succeeded or outcome is uncertain (rate limit, server error) —
+   *                   don't block restart in uncertain cases
+   *   { ok: false } — no credentials, invalid key (401), or network unreachable (Stage 2)
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
     // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
     const injectedEnv = { ...process.env };
+    let envApiKey = '';
+    let envOauthToken = '';
     try {
       const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
       const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
       const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-      if (apiMatch) injectedEnv.ANTHROPIC_API_KEY = apiMatch[1].trim();
-      if (oauthMatch) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthMatch[1].trim();
+      if (apiMatch) { envApiKey = apiMatch[1].trim(); injectedEnv.ANTHROPIC_API_KEY = envApiKey; }
+      if (oauthMatch) { envOauthToken = oauthMatch[1].trim(); injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken; }
     } catch { /* .env absent — no keys to inject */ }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
@@ -109,11 +116,29 @@ export class ClaudeAdapter extends RuntimeAdapter {
       if (authStatus?.loggedIn === false) {
         return { ok: false, reason: 'auth_status_not_logged_in' };
       }
-    } catch { /* JSON parse failed — fall through to Stage 2 probe */ }
+    } catch { /* JSON parse failed — fall through to Stage 2/3 probe */ }
 
-    // Stage 2: Live probe — `claude -p ping --max-turns 1`.
-    // Use async execFile — spawnSync would block the event loop for up to 30s,
-    // freezing the monitor's heartbeat state machine.
+    // Stage 2: HTTP validation for .env credentials.
+    // `claude auth status` returns loggedIn:true whenever ANTHROPIC_API_KEY is set in env —
+    // it never validates the key against the Anthropic API. A fake key passes Stage 1 but
+    // returns 401 here immediately, avoiding the 30s ping timeout in firewalled environments.
+    //
+    // Response handling:
+    //   200 → valid credentials                        → ok: true
+    //   401 → invalid / revoked key or token           → ok: false
+    //   429 → rate-limited (key is valid)              → ok: true
+    //   5xx / other → server-side uncertainty          → ok: true (don't block restart)
+    //   AbortError (5s timeout) / network error        → ok: false (conservative; can't verify)
+    if (envApiKey) {
+      return await this._httpValidateCredentials({ 'x-api-key': envApiKey });
+    }
+    if (envOauthToken) {
+      return await this._httpValidateCredentials({ 'Authorization': `Bearer ${envOauthToken}` });
+    }
+
+    // Stage 3: Live CLI probe — `claude -p ping --max-turns 1`.
+    // Reached only when no .env key is present (credentials stored in ~/.claude/).
+    // Use async execFile — spawnSync would block the event loop for up to 30s.
     try {
       const { stdout } = await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
         env: injectedEnv,
@@ -126,33 +151,53 @@ export class ClaudeAdapter extends RuntimeAdapter {
       }
       return { ok: true, reason: 'cli_probe' };
     } catch (err) {
-      // execFile throws on non-zero exit; inspect output to distinguish auth failure
-      // from transient failures (timeout, network error, rate limit, etc.).
-      //
-      // Anthropic API auth failures always include {"type":"authentication_error"} in the
-      // JSON error body — regardless of whether it's an API key or OAuth token. This is
-      // a structured field from the API, not free-form text, so it's stable across CLI versions.
-      // Rate limits produce "rate_limit_error", server errors produce "api_error" — no overlap.
       const output = (err.stdout ?? '') + (err.stderr ?? '');
       if (output.includes('authentication_error')) {
         return { ok: false, reason: 'cli_probe_authentication_error' };
       }
-      // Whitelist the known transient failures (network issues, rate limits, server errors,
-      // or process killed by the 30s timeout). Everything else — including any "not logged in"
-      // message regardless of exact wording — is treated as an auth failure.
-      // Using a whitelist instead of a blacklist makes this robust to future CLI version changes:
-      // any new auth error message will correctly fall through to ok:false.
       const isTransient =
         output.includes('rate_limit_error') ||
         output.includes('api_error') ||
         err.code === 'ETIMEDOUT' ||
         err.code === 'ECONNREFUSED' ||
         err.code === 'ENOTFOUND' ||
-        err.killed; // process killed by timeout
+        err.killed;
       if (isTransient) {
         return { ok: true, reason: 'cli_probe_uncertain' };
       }
       return { ok: false, reason: 'cli_probe_not_authenticated' };
+    }
+  }
+
+  /**
+   * Validate Anthropic credentials via a lightweight HTTP probe (GET /v1/models).
+   * Uses a 5s timeout — fast enough to not block the monitor loop, short enough to detect
+   * firewalled environments (Docker DROP rules) without a 30s ping hang.
+   *
+   * @param {Record<string,string>} authHeaders — { 'x-api-key': key } or { 'Authorization': 'Bearer token' }
+   * @returns {Promise<{ok: boolean, reason: string}>}
+   */
+  async _httpValidateCredentials(authHeaders) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/models', {
+        method: 'GET',
+        headers: { 'anthropic-version': '2023-06-01', ...authHeaders },
+        signal: controller.signal,
+      });
+      if (resp.status === 200) return { ok: true, reason: 'http_validate_200' };
+      if (resp.status === 401) return { ok: false, reason: 'http_validate_401' };
+      if (resp.status === 429) return { ok: true, reason: 'http_validate_429_rate_limited' };
+      // 5xx and unusual 4xx — server-side issue; don't block restart
+      return { ok: true, reason: `http_validate_${resp.status}` };
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        return { ok: false, reason: 'http_validate_timeout' };
+      }
+      return { ok: false, reason: 'http_validate_network_error' };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
