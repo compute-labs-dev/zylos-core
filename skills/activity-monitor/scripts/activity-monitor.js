@@ -482,6 +482,7 @@ async function startAgent() {
     if (!authResult.ok) {
       log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.`);
       authRetrySuppressedUntil = Date.now() + 180_000;
+      engine.setHealth('auth_failed', authResult.reason ?? 'unknown');
       const now = Math.floor(Date.now() / 1000);
       if ((now - authFailedNotifiedAt) > 3600) {
         authFailedNotifiedAt = now;
@@ -497,6 +498,9 @@ async function startAgent() {
     // Auth passed — consume the restart budget and mark startup in progress.
     // Done here (after auth check) so auth failures don't consume backoff budget.
     authRetrySuppressedUntil = 0;
+    if (engine.health === 'auth_failed') {
+      engine.setHealth('ok', 'auth_passed');
+    }
     consecutiveRestarts += 1;
     startupGrace = 30;
     notRunningCount = 0;

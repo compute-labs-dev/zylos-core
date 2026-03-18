@@ -162,6 +162,12 @@ export class HeartbeatEngine {
 
     this.lastUserMessageRecoveryAt = currentTime;
 
+    if (this.healthState === 'auth_failed') {
+      this.deps.log('User message received during auth failure — clearing auth_failed for immediate retry');
+      this.setHealth('ok', 'user_message_during_auth_failure');
+      return true;
+    }
+
     if (this.healthState === 'rate_limited') {
       this.deps.log('User message triggered rate-limit recovery attempt');
       this.cooldownUntil = 0;
