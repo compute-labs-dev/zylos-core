@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v25 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor + ProcSampler
+ * Activity Monitor v26 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor + ProcSampler
+ *
+ * v26 changes (launch grace period):
+ *   - 3-minute grace period after agent launch: periodic heartbeat probes are skipped
+ *     during this window to allow the new session to complete initialization (hooks,
+ *     CLAUDE.md loading, session-start injection) before being expected to respond
+ *   - Prevents false stuck_timeout kills on freshly launched sessions
  *
  * v25 changes (frozen process detection via /proc sampling):
  *   - New ProcSampler module: cross-platform context-switch sampling (Linux /proc, macOS top)
@@ -188,6 +194,7 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 // ProcSampler handles frozen-process detection, but periodic probe catches cases where
 // the process is alive but functionally broken (e.g., stuck API errors, auth expired).
 const PERIODIC_PROBE_INTERVAL = 180; // 3 min — complementary to ProcSampler, not replaced by it
+const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -233,6 +240,7 @@ let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
 let lastPeriodicProbeAt = 0;
+let lastLaunchAt = 0;
 let lastDeadApiPid = null;
 let authFailedNotifiedAt = 0;
 let authRetrySuppressedUntil = 0;
@@ -481,6 +489,7 @@ async function startAgent() {
     notRunningCount = 0;
 
   log(`Guardian: Starting ${adapter.displayName}...`);
+  lastLaunchAt = Math.floor(Date.now() / 1000);
 
   // Clear stale context temp files from a previous session
   try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
@@ -1381,8 +1390,11 @@ async function monitorLoop() {
   // Periodic probe: 3-min end-to-end health check. Complementary to ProcSampler:
   // ProcSampler detects frozen processes, periodic probe catches functional failures
   // (API errors, auth expired, stuck prompts) where the process is alive but broken.
+  // Skip during launch grace period — new sessions need time to initialize hooks/CLAUDE.md
+  // before they can respond to heartbeats.
   if (engine.health === 'ok') {
-    if (activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
+    const withinGracePeriod = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
+    if (!withinGracePeriod && activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
       const ok = engine.requestImmediateProbe('periodic_3min');
       if (ok) lastPeriodicProbeAt = currentTime;
     }

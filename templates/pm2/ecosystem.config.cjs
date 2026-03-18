@@ -18,12 +18,12 @@ const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
-// Read a value from .env file
+// Read a value from .env file (tolerates quotes and spaces around =)
 function readEnvValue(key, defaultValue = '') {
   try {
     const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-    if (match) return match[1];
+    const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm'));
+    if (match) return match[1].trim().replace(/^(['"])(.*)\1$/, '$2');
   } catch {}
   return defaultValue;
 }

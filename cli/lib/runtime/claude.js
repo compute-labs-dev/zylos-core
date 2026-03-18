@@ -42,6 +42,23 @@ const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' '
 
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 
+/**
+ * Parse a value from a .env file, tolerating common formatting variations:
+ *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
+ *   - Single/double quotes around value (e.g. `KEY="value"`)
+ *   - Trailing whitespace
+ *
+ * @param {string} content - Full .env file content
+ * @param {string} key     - Variable name to extract
+ * @returns {string}       - Trimmed, unquoted value, or empty string if not found
+ */
+function _parseEnvValue(content, key) {
+  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
+  const m = content.match(re);
+  if (!m) return '';
+  return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+}
+
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
 export class ClaudeAdapter extends RuntimeAdapter {
@@ -88,10 +105,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
     let envOauthToken = '';
     try {
       const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-      const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-      if (apiMatch) { envApiKey = apiMatch[1].trim(); injectedEnv.ANTHROPIC_API_KEY = envApiKey; }
-      if (oauthMatch) { envOauthToken = oauthMatch[1].trim(); injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken; }
+      envApiKey = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
+      envOauthToken = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
+      if (envApiKey) injectedEnv.ANTHROPIC_API_KEY = envApiKey;
+      if (envOauthToken) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken;
     } catch { /* .env absent — no keys to inject */ }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
@@ -308,10 +325,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
       // Read API tokens from .env — only when no native login
       try {
         const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-        if (apiMatch) apiKeyValue = apiMatch[1].trim();
-        const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-        if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
+        apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
+        oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
       } catch { }
 
       // Pre-approve API keys to skip interactive confirmation prompts

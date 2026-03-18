@@ -177,8 +177,8 @@ export function saveApiKeyToEnv(apiKey) {
   try {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
-      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
+    if (content.match(/^\s*ANTHROPIC_API_KEY\s*=.*$/m)) {
+      content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
     } else {
       content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
     }
@@ -221,13 +221,13 @@ export function saveSetupTokenToEnv(token) {
   try {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m)) {
-      content = content.replace(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m, `CLAUDE_CODE_OAUTH_TOKEN=${token}`);
+    if (content.match(/^\s*CLAUDE_CODE_OAUTH_TOKEN\s*=.*$/m)) {
+      content = content.replace(/^\s*CLAUDE_CODE_OAUTH_TOKEN\s*=.*$/m, `CLAUDE_CODE_OAUTH_TOKEN=${token}`);
     } else {
       content = content.trimEnd() + `\n\n# Claude Code setup token (set by zylos init)\nCLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
     }
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
+    content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
     fs.writeFileSync(envPath, content);
   } catch {}
 }
