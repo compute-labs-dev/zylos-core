@@ -429,17 +429,19 @@ async function processNextMessage() {
   }
 
   // D1: heartbeat must not interrupt active generation.
-  // Auto-ack requires ALL three conditions:
+  // Auto-ack requires ALL four conditions:
   //   1. It's a heartbeat (not other bypass controls like context rotation)
-  //   2. /proc confirms process is alive (not just scheduled)
-  //   3. Agent is confirmed active with fresh hooks (active_tools > 0 + updated <60s)
+  //   2. Agent state is not offline/stopped (proc-state can be stale for ~30s after crash)
+  //   3. /proc confirms process is alive (not just scheduled)
+  //   4. Agent is confirmed active with fresh hooks (active_tools > 0 + updated <60s)
   // When idle (active_tools === 0) or hooks are stale, heartbeat is delivered as a
   // real end-to-end probe to verify the agent can actually process messages.
   if (bypass) {
     const isHeartbeat = (item.content || '').includes('Heartbeat check');
+    const agentAlive = agentState.state !== 'offline' && agentState.state !== 'stopped';
     const procState = readProcState();
     const confirmed = isAgentConfirmedActive();
-    if (isHeartbeat && procState && procState.alive === true && confirmed) {
+    if (isHeartbeat && agentAlive && procState && procState.alive === true && confirmed) {
       log(`Auto-acking heartbeat id=${item.id}: /proc alive + active_tools>0 fresh (delta=${procState.lastDelta})`);
       ackControl(item.id);
       return { delivered: true, state: agentState.state };
