@@ -498,9 +498,6 @@ async function startAgent() {
     // Auth passed — consume the restart budget and mark startup in progress.
     // Done here (after auth check) so auth failures don't consume backoff budget.
     authRetrySuppressedUntil = 0;
-    if (engine.health === 'auth_failed') {
-      engine.setHealth('ok', 'auth_passed');
-    }
     consecutiveRestarts += 1;
     startupGrace = 30;
     notRunningCount = 0;
