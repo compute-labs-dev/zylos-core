@@ -259,8 +259,8 @@ export class HeartbeatEngine {
 
     // Process signal acceleration: agentRunning just transitioned false→true,
     // grace period elapsed — send immediate heartbeat to verify recovery.
-    // Works in recovering and down states.
-    if ((this.healthState === 'recovering' || this.healthState === 'down') && this._shouldAccelerate(currentTime)) {
+    // Works in recovering, down, and auth_failed states.
+    if ((this.healthState === 'recovering' || this.healthState === 'down' || this.healthState === 'auth_failed') && this._shouldAccelerate(currentTime)) {
       this.deps.log(`Process signal acceleration: Agent restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
       const phase = this.healthState === 'down' ? 'signal-down-check' : 'signal-recovery';
