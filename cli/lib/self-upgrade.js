@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
-import { fetchRawFile, sanitizeError } from './github.js';
+import { fetchRawFile, fetchLatestTag, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
@@ -38,13 +38,32 @@ export function getCurrentVersion() {
 
 /**
  * Get latest zylos-core version from GitHub.
- * @param {string} [branch] - Branch to read from (defaults to 'main')
+ * Uses tag-based detection (unified with component upgrades).
+ * Falls back to package.json on a branch when --branch is specified.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.branch] - Branch to read from (reads package.json from branch)
+ * @param {boolean} [opts.beta=false] - Include prerelease (beta) tags
  */
-function getLatestVersion(branch) {
+function getLatestVersion({ branch, beta = false } = {}) {
+  // When --branch is specified, read package.json from that branch
+  if (branch) {
+    try {
+      const content = fetchRawFile(REPO, 'package.json', branch);
+      const pkg = JSON.parse(content);
+      return { success: true, version: pkg.version };
+    } catch (err) {
+      return { success: false, error: `Cannot fetch latest version: ${sanitizeError(err.message)}` };
+    }
+  }
+
+  // Default: tag-based detection (unified with component upgrades)
   try {
-    const content = fetchRawFile(REPO, 'package.json', branch || 'main');
-    const pkg = JSON.parse(content);
-    return { success: true, version: pkg.version };
+    const tagVersion = fetchLatestTag(REPO, { includePrerelease: beta });
+    if (tagVersion) {
+      return { success: true, version: tagVersion };
+    }
+    return { success: false, error: 'No release tags found' };
   } catch (err) {
     return { success: false, error: `Cannot fetch latest version: ${sanitizeError(err.message)}` };
   }
@@ -57,16 +76,18 @@ function getLatestVersion(branch) {
 /**
  * Check if zylos-core has updates available.
  *
- * @param {string} [branch] - Branch to compare against (defaults to 'main')
+ * @param {object} [opts]
+ * @param {string} [opts.branch] - Branch to compare against
+ * @param {boolean} [opts.beta=false] - Include prerelease (beta) versions
  * @returns {object} { success, hasUpdate, current, latest }
  */
-export function checkForCoreUpdates(branch) {
+export function checkForCoreUpdates({ branch, beta = false } = {}) {
   const current = getCurrentVersion();
   if (!current.success) {
     return { success: false, error: 'version_not_found', message: current.error };
   }
 
-  const latest = getLatestVersion(branch);
+  const latest = getLatestVersion({ branch, beta });
   if (!latest.success) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
