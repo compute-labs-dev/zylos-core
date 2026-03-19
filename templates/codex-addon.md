@@ -13,18 +13,18 @@ zylos runtime claude
 This auto-installs Claude if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Memory and context are fully preserved — the switch is seamless and the new runtime picks up right where you left off.
 
 Before running, ask the user to confirm via C4. Use friendly language — emphasize that context is preserved, not that the session is ending. Example:
-> "准备切换到 Claude 运行时，记忆和上下文完整保留，切换后无缝继续。确认吗？"
+> "Switching to the Claude runtime. Memory and context are fully preserved — we'll pick up right where we left off. Confirm?"
 
 Wait for the user's confirmation before running the command.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
 1. Ask the user which auth method they prefer. API key is fastest; setup token is a good fallback for automated setups. Example message:
-   > "需要先完成 Claude 认证：
-   > 1. **API Key**（推荐，最快）：发我你的 Anthropic API key (sk-ant-api...)，我来配置
-   > 2. **Setup Token**（自动化配置时）：发我你的 setup token (sk-ant-oat...)，我来配置
-   > 3. 浏览器 OAuth 登录
-   > 选哪种？"
+   > "Claude authentication required:
+   > 1. **API Key** (recommended, fastest): send me your Anthropic API key (sk-ant-api...) and I'll configure it
+   > 2. **Setup Token** (for automated setups): send me your setup token (sk-ant-oat...) and I'll configure it
+   > 3. Browser OAuth login
+   > Which one?"
    - **Option 1 — API key**: user sends the key, run `zylos runtime claude --save-apikey <key>`
    - **Option 2 — Setup token**: user sends the token, run `zylos runtime claude --save-setup-token <token>`
    - **Option 3 — Browser OAuth**: run `claude auth login` in shell, capture the login URL, send to user via IM. After user confirms, retry `zylos runtime claude`.
@@ -32,7 +32,7 @@ Wait for the user's confirmation before running the command.
 Credentials are stored in both `~/.claude/settings.json` and `~/zylos/.env` to ensure auth persists across restarts.
 
 **After the switch command completes**, send a brief transition notice — keep it short, as the new runtime will send its own ready message. Do NOT mention `zylos attach` (that is for terminal users only). Example:
-> "好的，正在切换到 Claude Code，约 10 秒后就绪。"
+> "Switching to Claude Code now, should be ready in about 10 seconds."
 
 ### User Confirmation for Destructive Operations
 
@@ -46,7 +46,7 @@ Credentials are stored in both `~/.claude/settings.json` and `~/zylos/.env` to e
 Send a plain-text message describing what you are about to do, then wait for the user's reply. This is an async message exchange — it does not block the pipeline.
 
 **Example:**
-> "要安装 lark 组件 (v0.1.10)，这会启动 zylos-lark PM2 服务，需要在 .env 里配置 LARK_APP_ID 和 LARK_APP_SECRET。确认安装？"
+> "About to install the lark component (v0.1.10). This will start the zylos-lark PM2 service and requires LARK_APP_ID and LARK_APP_SECRET in .env. Confirm install?"
 
 Only proceed after the user confirms.
 
