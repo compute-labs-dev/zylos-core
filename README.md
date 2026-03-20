@@ -302,7 +302,6 @@ Zylos is fully compatible with the [OpenClaw](https://github.com/openclaw/opencl
 | Context compression | Auto memory save + infinite context | ✅ Available |
 | Browser automation | [zylos-browser](https://github.com/zylos-ai/zylos-browser) | ✅ Available |
 | Cron / webhooks | Scheduler (cron, NL input, idle-gating) | ✅ Available |
-| Voice pipeline | Telegram / Lark voice transcription | ✅ Available |
 
 > **Architecture note:** OpenClaw supports multi-session routing to isolated workspaces. Zylos takes a different approach — unified session (one AI, one consciousness across all channels). This is a deliberate design choice, not a missing feature.
 

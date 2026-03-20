@@ -301,7 +301,6 @@ Zylos 已全面兼容 [OpenClaw](https://github.com/openclaw/openclaw) 生态。
 | 上下文压缩 | 自动记忆保存 + 无限上下文 | ✅ 已有 |
 | 浏览器自动化 | [zylos-browser](https://github.com/zylos-ai/zylos-browser) | ✅ 已有 |
 | 定时任务 / Webhooks | 调度器（Cron、自然语言输入、空闲门控） | ✅ 已有 |
-| 语音管道 | Telegram / 飞书语音转文字 | ✅ 已有 |
 
 > **架构差异说明：** OpenClaw 支持多会话路由到隔离工作区。Zylos 采用不同方案——统一会话（一个 AI、一个意识、跨所有通道）。这是刻意的架构选择，而非功能缺失。
 
