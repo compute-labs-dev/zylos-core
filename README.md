@@ -297,10 +297,14 @@ Zylos is fully compatible with the [OpenClaw](https://github.com/openclaw/opencl
 |---|---|---|
 | Skills / ClawHub | Component System + [Registry](https://github.com/zylos-ai/zylos-registry) | ✅ Available |
 | Multi-agent routing | [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B Protocol | ✅ Available |
-| Session management | C4 Comm Bridge + Inside Out Memory | ✅ Available |
+| Gateway (control plane) | C4 Comm Bridge (unified gateway, SQLite audit) | ✅ Available |
+| Memory / persistence | Inside Out Memory (5-layer architecture) | ✅ Available |
+| Context compression | Auto memory save + infinite context | ✅ Available |
 | Browser automation | [zylos-browser](https://github.com/zylos-ai/zylos-browser) | ✅ Available |
 | Cron / webhooks | Scheduler (cron, NL input, idle-gating) | ✅ Available |
 | Voice pipeline | Telegram / Lark voice transcription | ✅ Available |
+
+> **Architecture note:** OpenClaw supports multi-session routing to isolated workspaces. Zylos takes a different approach — unified session (one AI, one consciousness across all channels). This is a deliberate design choice, not a missing feature.
 
 ### For OpenClaw Users
 
