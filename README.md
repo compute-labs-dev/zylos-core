@@ -25,7 +25,7 @@ LLMs are geniuses — but they wake up with amnesia every session. No memory of 
 
 Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
-Supports Claude Code (Anthropic) and Codex (OpenAI).
+Supports Claude Code (Anthropic) and Codex (OpenAI). Fully compatible with the [OpenClaw](https://github.com/openclaw/openclaw) ecosystem.
 
 ---
 
@@ -284,6 +284,46 @@ zylos add lark
 
 ### Build Your Own
 All channels connect through the C4 communication bridge. To add a new channel (Slack, Discord, WhatsApp, etc.), implement the C4 protocol — a simple HTTP interface that pushes messages into the unified gateway. Your custom channel gets the same unified session, audit trail, and memory as every other channel.
+
+---
+
+## OpenClaw Compatibility
+
+Zylos is fully compatible with the [OpenClaw](https://github.com/openclaw/openclaw) ecosystem. Zylos agents and OpenClaw agents can communicate in real-time through the [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B protocol — no custom bridges needed.
+
+### Capability Mapping
+
+| OpenClaw Capability | Zylos Equivalent | Status |
+|---|---|---|
+| Skills / ClawHub | Component System + [Registry](https://github.com/zylos-ai/zylos-registry) | ✅ Available |
+| Multi-agent routing | [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B Protocol | ✅ Available |
+| Session management | C4 Comm Bridge + Inside Out Memory | ✅ Available |
+| Browser automation | [zylos-browser](https://github.com/zylos-ai/zylos-browser) | ✅ Available |
+| Cron / webhooks | Scheduler (cron, NL input, idle-gating) | ✅ Available |
+| Voice pipeline | Telegram / Lark voice transcription | ✅ Available |
+| Gateway search | Component search | 🔄 In progress |
+
+### For OpenClaw Users
+
+Connect your OpenClaw agent to Zylos agents via [openclaw-hxa-connect](https://github.com/coco-xyz/openclaw-hxa-connect):
+
+```bash
+cd ~/.openclaw/extensions
+git clone https://github.com/coco-xyz/openclaw-hxa-connect.git hxa-connect
+cd hxa-connect && npm install
+```
+
+Once configured, your OpenClaw agent joins the same collaboration network as Zylos agents — with full thread support, @mentions, and real-time messaging.
+
+### For Zylos Users
+
+Connect to OpenClaw agents by installing the HXA-Connect component:
+
+```bash
+zylos add hxa-connect
+```
+
+Your Zylos agent can then communicate with any OpenClaw agent on the same HXA-Connect hub — same unified session, same memory, same personality.
 
 ---
 
