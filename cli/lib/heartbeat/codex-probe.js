@@ -184,24 +184,43 @@ function _captureTmuxPane(session) {
 
 /**
  * Check if the Codex process is alive in the tmux session.
- * Uses tmux session existence + PID liveness (kill -0).
+ * Mirrors CodexAdapter.isRunning() logic: checks tmux session, pane PID,
+ * and verifies the process is actually codex/node (not just an orphaned shell).
+ *
+ * Note: This only proves process existence, not responsiveness. A stuck Codex
+ * (e.g., API hang, modal prompt) will still report alive. This is an intentional
+ * trade-off — false timeout → kill loops are worse than missing a stuck process.
+ * Phase 2 (hooks-based C4 delivery) will address responsiveness checking.
  *
  * @param {string} session
  * @returns {boolean}
  */
 function _isProcessAlive(session) {
   try {
-    execSync(`tmux has-session -t "${session}" 2>/dev/null`);
+    execSync(`tmux has-session -t "${session}" 2>/dev/null`, { timeout: 3_000 });
   } catch {
     return false;
   }
+  let panePid;
   try {
-    const pid = execSync(
+    panePid = execSync(
       `tmux list-panes -t "${session}" -F "#{pane_pid}" 2>/dev/null | head -1`,
-      { encoding: 'utf8' }
+      { encoding: 'utf8', timeout: 3_000 }
     ).trim();
-    if (!pid) return false;
-    process.kill(parseInt(pid, 10), 0); // signal-0: existence check only
+    if (!panePid) return false;
+  } catch {
+    return false;
+  }
+  // Check if the pane process itself is codex/node
+  try {
+    const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, {
+      encoding: 'utf8', timeout: 3_000,
+    }).trim();
+    if (name === 'codex' || name === 'node') return true;
+  } catch { /* not codex directly — check children */ }
+  // Check children of pane process for codex (pane_pid is often bash)
+  try {
+    execSync(`pgrep -P ${panePid} -f "codex" > /dev/null 2>&1`, { timeout: 3_000 });
     return true;
   } catch {
     return false;
