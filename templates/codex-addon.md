@@ -67,11 +67,11 @@ You are running with `--dangerously-bypass-approvals-and-sandbox` (all Codex-int
 
 ### Heartbeat
 
-When you receive a message containing `Heartbeat check`, acknowledge it immediately by running the ack command:
+When you receive a message containing `Heartbeat check`, execute the ack command **immediately and silently** — no commentary, no explanation, no reasoning output. Just run the command:
 ```bash
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js ack --id <id>
 ```
-The `ack via:` path and ID are included in the message.
+The `ack via:` path and ID are included in the message. Do NOT output any text before or after the command.
 
 ### Memory Sync
 
