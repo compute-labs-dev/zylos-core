@@ -19,6 +19,7 @@ import { commandExists } from '../lib/shell-utils.js';
 import {
   installClaude,
   installCodex,
+  isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
   saveClaudeBaseUrlToSettingsAndEnv,
@@ -38,15 +39,6 @@ const red    = (s) => `\x1b[31m${s}\x1b[0m`;
 const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
 const dim    = (s) => `\x1b[2m${s}\x1b[0m`;
 const cyan   = (s) => `\x1b[36m${s}\x1b[0m`;
-
-function isValidBaseUrl(value) {
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host;
-  } catch {
-    return false;
-  }
-}
 
 // ── Public API ────────────────────────────────────────────────────────────
 

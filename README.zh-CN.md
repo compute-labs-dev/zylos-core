@@ -80,16 +80,16 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 **环境变量：**
 
-参数也可通过环境变量设置，运行时专用的 base URL 环境变量也会生效。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+部分参数可在 `zylos init` 时通过环境变量设置。base URL 相关环境变量会在安装后被运行时和配置文件使用，但不会在 `init` 阶段当作参数等价物直接读取。对已支持的 `init` 输入，优先级仍是：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
 
 | 环境变量 | 对应参数 |
 |---------|---------|
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `OPENAI_API_KEY` | `--codex-api-key`（存储在 `~/.codex/auth.json`，不在 `.env`） |
-| `ANTHROPIC_BASE_URL` | `--base-url` |
-| `OPENAI_BASE_URL` | `--codex-base-url` |
+| `ANTHROPIC_BASE_URL` | 安装后供 Claude 运行时使用；不是 `init` 参数等价物 |
+| `OPENAI_API_KEY` | `--codex-api-key` |
+| `OPENAI_BASE_URL` | 安装后供 Codex 运行时使用；不是 `init` 参数等价物 |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |

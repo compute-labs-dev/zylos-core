@@ -81,16 +81,16 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 
 **Environment variables:**
 
-Flags can also be set via environment variables. Runtime-specific base URL variables are also honored. Resolution order: CLI flag > env var > existing `.env` > interactive prompt.
+Some flags can also be set via environment variables during `zylos init`. Base URL environment variables are written and used by runtime/config files after setup, but are not read as direct `init` flag equivalents. Resolution order for supported `init` inputs: CLI flag > env var > existing `.env` > interactive prompt.
 
 | Environment Variable | Equivalent Flag |
 |---------------------|-----------------|
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `OPENAI_API_KEY` | `--codex-api-key` (stored in `~/.codex/auth.json`, not `.env`) |
-| `ANTHROPIC_BASE_URL` | `--base-url` |
-| `OPENAI_BASE_URL` | `--codex-base-url` |
+| `ANTHROPIC_BASE_URL` | Used by Claude runtime after setup; not an `init` flag equivalent |
+| `OPENAI_API_KEY` | `--codex-api-key` |
+| `OPENAI_BASE_URL` | Used by Codex runtime after setup; not an `init` flag equivalent |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |

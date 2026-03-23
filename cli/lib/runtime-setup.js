@@ -261,7 +261,7 @@ export function saveClaudeBaseUrl(baseUrl) {
  * @param {string} baseUrl
  * @returns {boolean}
  */
-export function saveClaudeBaseUrlToSettings(baseUrl) {
+function saveClaudeBaseUrlToSettings(baseUrl) {
   const settingsDir = path.join(os.homedir(), '.claude');
   const settingsPath = path.join(settingsDir, 'settings.json');
   try {

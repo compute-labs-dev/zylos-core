@@ -68,6 +68,36 @@ describe('base URL support', () => {
     }
   });
 
+  test('writeCodexConfig writes openai_base_url when explicit opts.openaiBaseUrl is provided', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-base-url-opt-'));
+    const originalHome = process.env.HOME;
+    const originalOpenAiBaseUrl = process.env.OPENAI_BASE_URL;
+
+    process.env.HOME = tmpRoot;
+    delete process.env.OPENAI_BASE_URL;
+
+    try {
+      const { writeCodexConfig } = await import('../runtime-setup.js');
+
+      assert.equal(
+        writeCodexConfig('/tmp/zylos-project', { openaiBaseUrl: 'https://explicit-proxy.example.com/v1' }),
+        true
+      );
+
+      const configPath = path.join(tmpRoot, '.codex', 'config.toml');
+      const config = fs.readFileSync(configPath, 'utf8');
+      assert.match(config, /openai_base_url = "https:\/\/explicit-proxy\.example\.com\/v1"/);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+
+      if (originalOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = originalOpenAiBaseUrl;
+
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   test('validateInitOptions rejects invalid base URL values for both runtimes', async () => {
     const { validateInitOptions } = await import('../../commands/init.js');
 

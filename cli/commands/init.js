@@ -25,6 +25,7 @@ import {
   installCodex,
   isClaudeAuthenticated,
   isCodexAuthenticated,
+  isValidBaseUrl,
   approveApiKey,
   saveApiKey,
   saveApiKeyToEnv,
@@ -1688,21 +1689,6 @@ function resolveFromEnv(opts) {
   // Docker containers often have TZ=UTC set by default, which would silently
   // overwrite user-configured timezones on re-init. Only --timezone flag applies.
   // The auto-detect in configureTimezone() will handle the default case.
-}
-
-/**
- * Validate resolved options. Returns error message or null if valid.
- *
- * @param {object} opts - Resolved options
- * @returns {string|null} Error message or null
- */
-function isValidBaseUrl(value) {
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host;
-  } catch {
-    return false;
-  }
 }
 
 export function validateInitOptions(opts) {
