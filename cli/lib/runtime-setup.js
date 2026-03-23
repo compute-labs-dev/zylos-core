@@ -282,7 +282,7 @@ export function saveClaudeBaseUrlToSettings(baseUrl) {
  * @param {string} baseUrl
  * @returns {boolean}
  */
-export function saveClaudeBaseUrlToEnv(baseUrl) {
+export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     if (!saveClaudeBaseUrlToSettings(baseUrl)) return false;

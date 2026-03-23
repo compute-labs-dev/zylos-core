@@ -29,7 +29,7 @@ import {
   saveApiKey,
   saveApiKeyToEnv,
   saveClaudeBaseUrl,
-  saveClaudeBaseUrlToEnv,
+  saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexBaseUrl,
@@ -2297,7 +2297,7 @@ export async function initCommand(args) {
       saveCodexApiKeyToEnv(pendingCodexApiKey);
     }
     if (pendingClaudeBaseUrl) {
-      saveClaudeBaseUrlToEnv(pendingClaudeBaseUrl);
+      saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
     }
     if (pendingCodexBaseUrl) {
       saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
@@ -2402,7 +2402,7 @@ export async function initCommand(args) {
     saveCodexApiKeyToEnv(pendingCodexApiKey);
   }
   if (pendingClaudeBaseUrl) {
-    saveClaudeBaseUrlToEnv(pendingClaudeBaseUrl);
+    saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
   }
   if (pendingCodexBaseUrl) {
     saveCodexBaseUrlToEnv(pendingCodexBaseUrl);

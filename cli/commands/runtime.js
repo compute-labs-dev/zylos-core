@@ -21,7 +21,7 @@ import {
   installCodex,
   saveApiKey,
   saveApiKeyToEnv,
-  saveClaudeBaseUrlToEnv,
+  saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexApiKey,
@@ -117,7 +117,7 @@ function applyCredentials(target, creds) {
 
 export function applyBaseUrl(target, baseUrl) {
   if (target === 'claude') {
-    return saveClaudeBaseUrlToEnv(baseUrl);
+    return saveClaudeBaseUrlToSettingsAndEnv(baseUrl);
   }
   if (target === 'codex') {
     if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
