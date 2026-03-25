@@ -189,7 +189,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
   _readFromSqlite() {
     try {
       // Same start-time filter as _getActiveRolloutPath() — ignore stale threads.
-      const sql = `SELECT id, tokens_used FROM threads
+      const sql = `SELECT id, tokens_used, rollout_path FROM threads
                    WHERE archived = 0
                      AND updated_at >= ${this._startTime}
                    ORDER BY updated_at DESC
@@ -198,14 +198,17 @@ export class CodexContextMonitor extends ContextMonitorBase {
         encoding: 'utf8', stdio: 'pipe', timeout: 5_000,
       }).trim();
       if (!out) return null;
-      const [threadIdRaw, tokensUsedRaw] = out.split('|');
+      const [threadIdRaw, tokensUsedRaw, rolloutPathRaw] = out.split('|');
       const tokensUsed = parseInt(tokensUsedRaw, 10);
       if (isNaN(tokensUsed)) return null;
-      const threadId = parseInt(threadIdRaw, 10);
+      const rolloutSessionId = rolloutPathRaw
+        ? this._sessionIdFromRolloutPath(rolloutPathRaw)
+        : undefined;
       return {
         used: tokensUsed,
         ceiling: this._getModelCeiling(),
-        sessionId: Number.isFinite(threadId) ? `thread-${threadId}` : undefined,
+        // Keep full UUID identity; parseInt("019d...") collapses many sessions to "19".
+        sessionId: rolloutSessionId ?? (threadIdRaw ? `thread-${threadIdRaw}` : undefined),
       };
     } catch {
       return null;
