@@ -49,7 +49,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
   /**
    * Read context usage from the active Codex session.
    *
-   * @returns {Promise<{used: number, ceiling: number} | null>}
+   * @returns {Promise<{used: number, ceiling: number, sessionId?: string} | null>}
    */
   async getUsage() {
     // Primary: JSONL rollout tail (most accurate, includes live model_context_window)
@@ -66,7 +66,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
    * Find the active JSONL rollout path via SQLite, then scan its tail for
    * the most recent token_count event.
    *
-   * @returns {{used: number, ceiling: number} | null}
+   * @returns {{used: number, ceiling: number, sessionId?: string} | null}
    */
   _readFromJsonl() {
     const rolloutPath = this._getActiveRolloutPath();
@@ -106,7 +106,7 @@ export class CodexContextMonitor extends ContextMonitorBase {
             const used = event.payload.info.last_token_usage.input_tokens;
             // model_context_window is the effective ceiling (already multiplied by pct)
             const ceiling = event.payload.info.model_context_window ?? this._getModelCeiling();
-            return { used, ceiling };
+            return { used, ceiling, sessionId: this._sessionIdFromRolloutPath(rolloutPath) };
           }
         } catch { /* skip malformed or partial line at read boundary */ }
       }
@@ -184,26 +184,45 @@ export class CodexContextMonitor extends ContextMonitorBase {
   /**
    * Fallback: read tokens_used from SQLite + ceiling from models_cache.json.
    *
-   * @returns {{used: number, ceiling: number} | null}
+   * @returns {{used: number, ceiling: number, sessionId?: string} | null}
    */
   _readFromSqlite() {
     try {
       // Same start-time filter as _getActiveRolloutPath() — ignore stale threads.
-      const sql = `SELECT tokens_used FROM threads
+      const sql = `SELECT id, tokens_used FROM threads
                    WHERE archived = 0
                      AND updated_at >= ${this._startTime}
                    ORDER BY updated_at DESC
                    LIMIT 1;`;
-      const out = execFileSync('sqlite3', [SQLITE_FILE, sql], {
+      const out = execFileSync('sqlite3', [SQLITE_FILE, '-separator', '|', sql], {
         encoding: 'utf8', stdio: 'pipe', timeout: 5_000,
       }).trim();
       if (!out) return null;
-      const tokensUsed = parseInt(out, 10);
+      const [threadIdRaw, tokensUsedRaw] = out.split('|');
+      const tokensUsed = parseInt(tokensUsedRaw, 10);
       if (isNaN(tokensUsed)) return null;
-      return { used: tokensUsed, ceiling: this._getModelCeiling() };
+      const threadId = parseInt(threadIdRaw, 10);
+      return {
+        used: tokensUsed,
+        ceiling: this._getModelCeiling(),
+        sessionId: Number.isFinite(threadId) ? `thread-${threadId}` : undefined,
+      };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Extract a stable session id from rollout filename:
+   *   .../rollout-<uuid>.jsonl -> <uuid>
+   *
+   * @param {string} rolloutPath
+   * @returns {string | undefined}
+   */
+  _sessionIdFromRolloutPath(rolloutPath) {
+    const name = path.basename(rolloutPath);
+    const match = name.match(/^rollout-(.+)\.jsonl$/);
+    return match?.[1];
   }
 
   /**

@@ -178,6 +178,7 @@ const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.jso
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
+const SESSION_SWITCH_LOG_FILE = path.join(MONITOR_DIR, 'session-switches.jsonl');
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -301,6 +302,26 @@ function log(message) {
   // Critical events also to stdout (visible in PM2 logs)
   if (/^(Guardian|Heartbeat|State:|=== Activity)/.test(message)) {
     console.log(line);
+  }
+}
+
+function recordSessionSwitch({ runtime, previousSessionId, sessionId, used, ceiling, ratio }) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    const entry = {
+      ts: new Date().toISOString(),
+      runtime,
+      previous_session_id: previousSessionId,
+      session_id: sessionId,
+      used,
+      ceiling,
+      ratio,
+    };
+    fs.appendFileSync(SESSION_SWITCH_LOG_FILE, JSON.stringify(entry) + '\n');
+  } catch (err) {
+    log(`Failed to record session switch: ${err.message}`);
   }
 }
 
@@ -1546,6 +1567,11 @@ function init() {
         const pct = Math.round(ratio * 100);
         log(`Context at ${pct}% (${used}/${ceiling}), requesting new-session handoff`);
         enqueueContextRotationHandoff({ ratio, used, ceiling });
+      },
+      onSessionChange: async ({ previousSessionId, sessionId, used, ceiling, ratio }) => {
+        const pct = Math.round(ratio * 100);
+        log(`Context monitor detected session switch (${adapter.runtimeId}): ${previousSessionId} -> ${sessionId} at ${pct}% (${used}/${ceiling})`);
+        recordSessionSwitch({ runtime: adapter.runtimeId, previousSessionId, sessionId, used, ceiling, ratio });
       }
     });
     log(`Context monitor started (${adapter.displayName})`);
