@@ -75,7 +75,7 @@ The `ack via:` path and ID are included in the message.
 
 ### Memory Sync
 
-When Memory Sync is triggered, follow the sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md` directly (inline, not as a background task). Report when complete.
+When Memory Sync is triggered, launch a background subagent using Codex's available multi-agent capability. Do not hardcode Claude-only Task tool parameters such as `model: sonnet` or `run_in_background`. Instead, use a Codex-supported agent configuration available in the current session and instruct that agent to follow the sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. This applies in Codex too, including `new-session` handoff flows. Do not run Memory Sync inline in the main loop. Report when complete.
 
 ### Available Tools
 
