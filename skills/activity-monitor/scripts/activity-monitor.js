@@ -179,6 +179,7 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const SESSION_SWITCH_LOG_FILE = path.join(MONITOR_DIR, 'session-switches.jsonl');
+const CODEX_HISTORY_FILE = path.join(os.homedir(), '.codex', 'history.jsonl');
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -210,6 +211,8 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 const PERIODIC_PROBE_INTERVAL = 180; // 3 min — complementary to ProcSampler, not replaced by it
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
+const CODEX_HISTORY_TAIL_BYTES = 131_072; // 128 KB tail scan for recent /clear events
+const CLEAR_EVENT_MAX_AGE = 180;          // ignore stale /clear events older than 3 minutes
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -255,6 +258,8 @@ let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
 let lastPeriodicProbeAt = 0;
+let lastHandledClearEventKey = '';
+let lastClearProbeAttemptAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
@@ -978,6 +983,76 @@ function sendTmuxKeys(keys) {
   } catch { /* best-effort */ }
 }
 
+function readLatestCodexClearEvent() {
+  try {
+    const stat = fs.statSync(CODEX_HISTORY_FILE);
+    if (!stat.size) return null;
+
+    const readBytes = Math.min(CODEX_HISTORY_TAIL_BYTES, stat.size);
+    const offset = stat.size - readBytes;
+    const buf = Buffer.alloc(readBytes);
+    const fd = fs.openSync(CODEX_HISTORY_FILE, 'r');
+    try {
+      fs.readSync(fd, buf, 0, readBytes, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const text = typeof event?.text === 'string' ? event.text.trim() : '';
+      if (!text.startsWith('/clear')) continue;
+
+      const ts = Number(event?.ts);
+      const sessionId = event?.session_id ? String(event.session_id) : '';
+      return {
+        ts: Number.isFinite(ts) ? ts : 0,
+        sessionId,
+        text,
+      };
+    }
+  } catch { /* history unavailable */ }
+
+  return null;
+}
+
+function maybeTriggerClearImmediateProbe(currentTime) {
+  if (adapter.runtimeId !== 'codex') return;
+
+  const clearEvent = readLatestCodexClearEvent();
+  if (!clearEvent) return;
+
+  const eventKey = `${clearEvent.ts}|${clearEvent.sessionId}|${clearEvent.text}`;
+  if (eventKey === lastHandledClearEventKey) return;
+
+  // On startup, ignore old /clear records and mark them handled once.
+  if (clearEvent.ts > 0 && (currentTime - clearEvent.ts) > CLEAR_EVENT_MAX_AGE) {
+    lastHandledClearEventKey = eventKey;
+    return;
+  }
+
+  // Throttle retry when a heartbeat is already pending.
+  if ((currentTime - lastClearProbeAttemptAt) < 5) return;
+  lastClearProbeAttemptAt = currentTime;
+
+  const ok = engine.requestImmediateProbe('clear_command');
+  if (!ok) return;
+
+  lastHandledClearEventKey = eventKey;
+  // Avoid immediately stacking periodic_3min probe right after clear-triggered probe.
+  lastPeriodicProbeAt = currentTime;
+}
+
 function parseUsageFromPane(paneContent) {
   if (!paneContent) return null;
 
@@ -1419,6 +1494,11 @@ async function monitorLoop() {
   if (engine.health !== 'ok') {
     maybeConsumeUserMessageSignal(currentTime);
   }
+
+  // Codex-only: /clear may happen when the user won't send a follow-up message.
+  // Detect recent /clear in history and actively trigger a probe so session
+  // switch detection can progress without waiting for the periodic 3-min probe.
+  maybeTriggerClearImmediateProbe(currentTime);
 
   // Periodic probe: 3-min end-to-end health check. Complementary to ProcSampler:
   // ProcSampler detects frozen processes, periodic probe catches functional failures
