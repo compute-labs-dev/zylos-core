@@ -134,6 +134,7 @@ import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
 import { runUsageProbe } from './usage-probe-runner.js';
 import { runCodexStatusProbe } from './usage-codex-probe-runner.js';
+import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
 import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
@@ -1136,6 +1137,68 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     });
 
     if (!shouldStart) return;
+
+    const rolloutStatus = readCodexUsageFromActiveRollout();
+    if (rolloutStatus) {
+      usageProbeConsecutiveFailures = 0;
+      usageProbeBackoffUntil = 0;
+      usageProbeCircuitUntil = 0;
+
+      const usage = {
+        session: rolloutStatus.sessionPercent,
+        sessionResets: rolloutStatus.sessionResets,
+        weeklyAll: rolloutStatus.weeklyAllPercent,
+        weeklyAllResets: rolloutStatus.weeklyAllResets,
+        weeklySonnet: null,
+        weeklySonnetResets: null,
+        fiveHour: rolloutStatus.fiveHourPercent,
+        fiveHourResets: rolloutStatus.fiveHourResets
+      };
+      const prevState = loadUsageState();
+      const now = new Date().toISOString();
+      const tierMetric = usage.weeklyAll ?? usage.session;
+      const tier = getUsageTier(tierMetric ?? 0);
+
+      const usageData = {
+        lastCheck: now,
+        lastCheckEpoch: currentTime,
+        session: { percent: usage.session, resets: usage.sessionResets },
+        weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+        weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+        fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
+        tier,
+        statusShape: rolloutStatus.statusShape,
+        probeReason: 'rollout_rate_limits',
+        probeDurationMs: 0,
+        probeAt: now,
+        lastNotifiedTier: prevState?.lastNotifiedTier || null,
+        lastNotifiedAt: prevState?.lastNotifiedAt || null
+      };
+
+      log(
+        `Usage monitor (codex): session=${usage.session ?? 'null'}% ` +
+        `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% ` +
+        `tier=${tier} shape=${rolloutStatus.statusShape}`
+      );
+
+      if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
+        const prevTier = prevState?.lastNotifiedTier;
+        const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+        const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+        const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+        if (tierEscalated || cooldownExpired) {
+          const message = formatUsageNotification(usage, tier);
+          sendUsageNotification(message);
+          usageData.lastNotifiedTier = tier;
+          usageData.lastNotifiedAt = now;
+        }
+      }
+
+      writeUsageState(usageData);
+      lastUsageCheckAt = currentTime;
+      return;
+    }
 
     const probeSessionName = `codex-status-probe-${process.pid}-${Date.now()}`;
     const lockResult = acquireUsageProbeLock({
