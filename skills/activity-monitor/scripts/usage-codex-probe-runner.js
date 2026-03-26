@@ -60,6 +60,13 @@ export function classifyCodexStatusProbePane(paneContent) {
   return { ok: false, reason: 'parse_failed' };
 }
 
+export function pickPreferredCodexStatus(previous, candidate) {
+  if (!candidate) return previous;
+  if (!previous) return candidate;
+  if (candidate.statusShape === 'panel') return candidate;
+  return previous;
+}
+
 export function runCodexStatusProbe({
   zylosDir,
   timeoutSeconds,
@@ -97,28 +104,46 @@ export function runCodexStatusProbe({
     sleep(1);
     sendKeys(sessionName, 'Enter');
 
-    const captureDeadline = Math.min(
+    let captureDeadline = Math.min(
       sessionDeadline,
       Date.now() + (captureWaitSeconds * 1000)
     );
 
     let paneContent = '';
     let status = null;
+    let fallbackStatus = null;
     let startupMenuDismissed = false;
+    let extendedForPanel = false;
 
     while (Date.now() < captureDeadline) {
       paneContent = capturePane(sessionName);
       const classified = classifyCodexStatusProbePane(paneContent);
       if (classified.ok) {
-        status = classified.status;
-        break;
+        const candidate = classified.status;
+        if (candidate.statusShape === 'panel') {
+          status = candidate;
+          break;
+        }
+
+        fallbackStatus = pickPreferredCodexStatus(fallbackStatus, candidate);
+        if (!extendedForPanel) {
+          // Statusline may appear before /status panel is fully rendered.
+          // Extend once to session timeout and keep polling for panel fields.
+          captureDeadline = sessionDeadline;
+          extendedForPanel = true;
+        }
+      } else {
+        startupMenuDismissed = maybeDismissStartupMenu(sessionName, paneContent, startupMenuDismissed);
       }
 
-      startupMenuDismissed = maybeDismissStartupMenu(sessionName, paneContent, startupMenuDismissed);
       sleep(1);
     }
 
     sendKeys(sessionName, 'Escape');
+
+    if (!status && fallbackStatus) {
+      status = fallbackStatus;
+    }
 
     if (!status) {
       if (Date.now() >= sessionDeadline) {
