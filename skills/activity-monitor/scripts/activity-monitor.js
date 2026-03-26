@@ -1076,7 +1076,7 @@ function formatUsageNotification(usage, tier) {
     `Session: ${session}% used`
   ];
 
-  if (usage.weeklySonnet !== undefined) {
+  if (usage.weeklySonnet !== undefined && usage.weeklySonnet !== null) {
     lines.push(`Weekly (Sonnet): ${usage.weeklySonnet}% used`);
   }
 

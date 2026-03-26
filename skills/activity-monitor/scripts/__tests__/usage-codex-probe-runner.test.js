@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifyCodexStatusProbePane } from '../usage-codex-probe-runner.js';
+import { classifyCodexStatusProbePane, pickPreferredCodexStatus } from '../usage-codex-probe-runner.js';
 
 describe('usage-codex-probe-runner', () => {
   it('classifies panel status as success', () => {
@@ -29,5 +29,14 @@ describe('usage-codex-probe-runner', () => {
     const result = classifyCodexStatusProbePane('hello world');
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'parse_failed');
+  });
+
+  it('prefers panel over statusline when both candidates exist', () => {
+    const statusline = { statusShape: 'statusline', sessionPercent: 53 };
+    const panel = { statusShape: 'panel', sessionPercent: 68, weeklyAllPercent: 40 };
+
+    const selected = pickPreferredCodexStatus(statusline, panel);
+    assert.equal(selected.statusShape, 'panel');
+    assert.equal(selected.weeklyAllPercent, 40);
   });
 });
