@@ -137,7 +137,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       if (isTransient) {
         return { ok: true, reason: 'cli_probe_uncertain' };
       }
-      return { ok: false, reason: 'cli_probe_not_authenticated' };
+      return { ok: false, reason: 'cli_probe_not_authenticated', output: output.slice(0, 500) };
     }
   }
 
