@@ -535,7 +535,7 @@ async function startAgent() {
     // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
     const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
     if (!authResult.ok) {
-      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.`);
+      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
       authRetrySuppressedUntil = Date.now() + 180_000;
       engine.setHealth('auth_failed', authResult.reason ?? 'unknown');
       const now = Math.floor(Date.now() / 1000);
