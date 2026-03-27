@@ -288,7 +288,6 @@ let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let lastDeadApiPid = null;
-let authFailedNotifiedAt = 0;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
 
@@ -535,18 +534,9 @@ async function startAgent() {
     // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
     const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
     if (!authResult.ok) {
-      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.`);
+      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
       authRetrySuppressedUntil = Date.now() + 180_000;
       engine.setHealth('auth_failed', authResult.reason ?? 'unknown');
-      const now = Math.floor(Date.now() / 1000);
-      if ((now - authFailedNotifiedAt) > 3600) {
-        authFailedNotifiedAt = now;
-        runC4Control([
-          'enqueue',
-          '--content', `Authentication failed for ${adapter.displayName} (${authResult.reason ?? 'unknown'}). Agent cannot restart. Please check your API key or login credentials.`,
-          '--priority', '1',
-        ]);
-      }
       return;
     }
 
@@ -611,6 +601,12 @@ function loadInitialHealth() {
   return { health: 'ok' };
 }
 
+function atomicWriteJson(filePath, value) {
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  fs.renameSync(tmp, filePath);
+}
+
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
@@ -619,7 +615,7 @@ function writeStatusFile(statusObj) {
       extra.rate_limit_reset = engine.rateLimitResetTime || null;
       extra.cooldown_until = engine.cooldownUntil || null;
     }
-    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, ...extra, health: engine.health }, null, 2));
+    atomicWriteJson(STATUS_FILE, { ...statusObj, ...extra, health: engine.health });
   } catch {
     // Best-effort.
   }
