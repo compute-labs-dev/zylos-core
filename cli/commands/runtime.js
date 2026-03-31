@@ -16,6 +16,7 @@ import { getZylosConfig, updateZylosConfig, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { restartFromEcosystem } from '../lib/pm2.js';
 import {
   installClaude,
   installCodex,
@@ -281,10 +282,10 @@ async function switchRuntime(target, flags) {
   console.log('\nRestarting services...');
   for (const svc of ['activity-monitor', 'c4-dispatcher']) {
     try {
-      execSync(`pm2 restart ${svc}`, { stdio: 'pipe' });
+      restartFromEcosystem([svc], { stdio: 'pipe' });
       console.log(`  ${green('✓')} ${svc}`);
     } catch (e) {
-      console.error(`  ${yellow(`Warning: pm2 restart ${svc} failed — ${e.message}`)}`);
+      console.error(`  ${yellow(`Warning: ecosystem restart for ${svc} failed — ${e.message}`)}`);
     }
   }
 

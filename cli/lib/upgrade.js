@@ -18,6 +18,7 @@ import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from '
 import { copyTree, syncTree } from './fs-utils.js';
 import { applyCaddyRoutes } from './caddy.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
+import { restartManagedProcess } from './pm2.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -466,9 +467,10 @@ function step7_startService(ctx) {
 
   const parsed = parseSkillMd(ctx.skillDir);
   const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
+  const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
 
   try {
-    execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    restartManagedProcess(serviceName, { ecosystemPath, stdio: 'pipe' });
     return { step: 7, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
     // restart fails if process was deleted from PM2 between step1 and step7; fall back to start
@@ -522,8 +524,9 @@ export function rollback(ctx) {
   if (ctx.serviceWasRunning) {
     const parsed = parseSkillMd(ctx.skillDir);
     const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
+    const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
     try {
-      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+      restartManagedProcess(serviceName, { ecosystemPath, stdio: 'pipe' });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });

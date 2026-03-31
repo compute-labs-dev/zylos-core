@@ -10,6 +10,7 @@ import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
+import { getCoreEcosystemPath, restartFromEcosystem } from '../lib/pm2.js';
 
 export async function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
@@ -164,7 +165,7 @@ export function startServices() {
   console.log(heading('Starting Zylos services...'));
 
   // Prefer ecosystem.config.cjs — it has proper PATH, env vars, and component services.
-  const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+  const ecosystemPath = getCoreEcosystemPath();
   if (fs.existsSync(ecosystemPath)) {
     try {
       execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
@@ -198,8 +199,10 @@ export function startServices() {
       started++;
     } catch (e) {
       try {
-        execSync(`pm2 restart ${svc.name} 2>/dev/null`, { stdio: 'pipe' });
-        console.log(`  ${success(`${bold(svc.name)} ${dim('(restarted)')}`)}`);
+        try { execSync(`pm2 delete "${svc.name}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+        const envOpts = svc.env ? svc.env.split(' ').map(e => `--env ${e}`).join(' ') : '';
+        execSync(`pm2 start ${svc.script} --name ${svc.name} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+        console.log(`  ${success(`${bold(svc.name)} ${dim('(started after cleanup)')}`)}`);
         started++;
       } catch (e2) {
         console.log(`  ${error(`${bold(svc.name)} ${dim('(failed)')}`)}`);
@@ -230,7 +233,7 @@ export function restartServices() {
   console.log(heading('Restarting Zylos services...'));
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
-    execSync(`pm2 restart ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
+    restartFromEcosystem(services, { stdio: 'inherit', save: true });
     console.log(success('Services restarted.'));
   } catch (e) {
     console.error(error('Failed to restart services'));

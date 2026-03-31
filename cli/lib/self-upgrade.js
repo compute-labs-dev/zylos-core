@@ -17,6 +17,7 @@ import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-uti
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { runMigrations } from './migrate.js';
 import { writeCodexConfig } from './runtime-setup.js';
+import { getCoreEcosystemPath, restartFromEcosystem } from './pm2.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -1110,14 +1111,14 @@ function step11_startCoreServices(ctx) {
     ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
     : null;
   const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
-  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
+  const ecosystemDest = getCoreEcosystemPath();
   if (ecosystemTemplateSrc && fs.existsSync(ecosystemTemplateSrc)) {
     try {
       fs.mkdirSync(pm2Dir, { recursive: true });
       fs.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
     } catch {
-      // Non-fatal — fall back to pm2 restart below
+      // Non-fatal — if copy fails, we can still use an already-deployed ecosystem file below.
     }
   } else if (fs.existsSync(ecosystemDest)) {
     // No new template available; use the existing ecosystem file
@@ -1129,12 +1130,7 @@ function step11_startCoreServices(ctx) {
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (ecosystemPath) {
-        // Re-read the ecosystem file so PM2 picks up updated env vars
-        execSync(`pm2 start "${ecosystemPath}" --only ${name} 2>/dev/null`, { stdio: 'pipe' });
-      } else {
-        execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
-      }
+      restartFromEcosystem([name], { ecosystemPath, stdio: 'pipe' });
       started.push(name);
     } catch {
       failed.push(name);
@@ -1230,9 +1226,10 @@ function rollbackSelf(ctx) {
   }
 
   // Restart services if they were running
+  const ecosystemPath = getCoreEcosystemPath();
   for (const name of ctx.servicesWereRunning) {
     try {
-      execSync(`pm2 restart ${name} 2>/dev/null || true`, { stdio: 'pipe' });
+      restartFromEcosystem([name], { ecosystemPath, stdio: 'pipe' });
       results.push({ action: `restart_${name}`, success: true });
     } catch (err) {
       results.push({ action: `restart_${name}`, success: false, error: err.message });
