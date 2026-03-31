@@ -378,6 +378,7 @@ function resolveCommBridgeScript(fileName) {
 }
 
 const C4_CONTROL_PATH = resolveCommBridgeScript('c4-control.js');
+const C4_DB_PATH = resolveCommBridgeScript('c4-db.js');
 const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function tmuxHasSession() {
@@ -650,6 +651,22 @@ function getTmuxActivity() {
     return parseInt(output.trim(), 10);
   } catch {
     return null;
+  }
+}
+
+const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
+const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
+let lastMemorySyncTriggerAt = 0;
+
+function getUnsummarizedCount() {
+  try {
+    const output = execFileSync('node', [C4_DB_PATH, 'unsummarized'], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000
+    });
+    const range = JSON.parse(output);
+    return range.count || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -1958,13 +1975,24 @@ function init() {
       onEarlyThreshold: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
         const thresholdPct = Math.round(contextMonitor.threshold * 100);
-        log(`Context at ${pct}% (approaching ${thresholdPct}% threshold), triggering early memory sync`);
+        // Cooldown: prevent re-inject while sync is still running
+        const now = Math.floor(Date.now() / 1000);
+        if ((now - lastMemorySyncTriggerAt) < MEMORY_SYNC_COOLDOWN_SECONDS) {
+          return;
+        }
+        const unsummarizedCount = getUnsummarizedCount();
+        if (unsummarizedCount <= CHECKPOINT_THRESHOLD) {
+          log(`Early memory sync skipped at ${pct}%: unsummarized=${unsummarizedCount} <= ${CHECKPOINT_THRESHOLD}`);
+          return;
+        }
+        log(`Context at ${pct}% (approaching ${thresholdPct}% threshold), triggering early memory sync (unsummarized=${unsummarizedCount})`);
         try {
           execFileSync('node', [C4_CONTROL_PATH, 'enqueue',
             '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
             '--priority', '2',
             '--no-ack-suffix'
           ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
+          lastMemorySyncTriggerAt = now;
           log(`Early memory sync enqueued at ${pct}%`);
         } catch (err) {
           log(`Failed to enqueue early memory sync: ${err.message}`);
