@@ -1107,8 +1107,11 @@ export function step10_ensureCodexConfig(deps = {}) {
 /**
  * Step 11: start core services
  */
-function step11_startCoreServices(ctx) {
+export function step11_startCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
+  const fsApi = deps.fs ?? fs;
+  const restartFn = deps.restartFromEcosystem ?? restartFromEcosystem;
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
 
   if (ctx.servicesWereRunning.length === 0) {
     return { step: 11, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
@@ -1121,27 +1124,28 @@ function step11_startCoreServices(ctx) {
   const ecosystemTemplateSrc = ctx.tempDir
     ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
     : null;
-  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
-  const ecosystemDest = getCoreEcosystemPath();
-  if (ecosystemTemplateSrc && fs.existsSync(ecosystemTemplateSrc)) {
+  const pm2Dir = path.join(zylosDir, 'pm2');
+  const ecosystemDest = deps.ecosystemPath ?? getCoreEcosystemPath();
+  if (ecosystemTemplateSrc && fsApi.existsSync(ecosystemTemplateSrc)) {
     try {
-      fs.mkdirSync(pm2Dir, { recursive: true });
-      fs.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
+      fsApi.mkdirSync(pm2Dir, { recursive: true });
+      fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
     } catch {
       // Non-fatal — if copy fails, we can still use an already-deployed ecosystem file below.
     }
-  } else if (fs.existsSync(ecosystemDest)) {
+  } else if (fsApi.existsSync(ecosystemDest)) {
     // No new template available; use the existing ecosystem file
     ecosystemPath = ecosystemDest;
   }
+  ecosystemPath = ecosystemPath ?? ecosystemDest;
 
   const started = [];
   const failed = [];
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      restartFromEcosystem([name], { ecosystemPath, stdio: 'pipe' });
+      restartFn([name], { ecosystemPath, stdio: 'pipe' });
       started.push(name);
     } catch {
       failed.push(name);

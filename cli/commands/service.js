@@ -12,6 +12,58 @@ import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildPm2EnvFlags(envString) {
+  if (!envString) return '';
+  return envString
+    .split(' ')
+    .filter(Boolean)
+    .map((entry) => `--env ${shellQuote(entry)}`)
+    .join(' ');
+}
+
+export function restartServicesWithDeps({
+  restartFromEcosystemFn = restartFromEcosystem,
+  restartManagedProcessFn = restartManagedProcess,
+  getCoreEcosystemPathFn = getCoreEcosystemPath,
+  execSyncFn = execSync,
+  logSuccess = console.log,
+  logError = console.error,
+} = {}) {
+  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
+  const ecosystemPath = getCoreEcosystemPathFn();
+  const fallbackServices = [];
+
+  for (const name of services) {
+    try {
+      restartFromEcosystemFn([name], { ecosystemPath, stdio: 'inherit' });
+    } catch {
+      try {
+        restartManagedProcessFn(name, {
+          ecosystemPath,
+          stdio: 'inherit',
+          fallbackToPlainRestartOnError: true,
+        });
+        fallbackServices.push(name);
+      } catch {
+        logError(error('Failed to restart services'));
+        return false;
+      }
+    }
+  }
+
+  execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' });
+  if (fallbackServices.length > 0) {
+    logSuccess(success(`Services restarted. Plain PM2 fallback used for: ${fallbackServices.join(', ')}.`));
+  } else {
+    logSuccess(success('Services restarted.'));
+  }
+  return true;
+}
+
 export async function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
 
@@ -193,15 +245,15 @@ export function startServices() {
       continue;
     }
     try {
-      const envOpts = svc.env ? svc.env.split(' ').map(e => `--env ${e}`).join(' ') : '';
-      execSync(`pm2 start ${svc.script} --name ${svc.name} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+      const envOpts = buildPm2EnvFlags(svc.env);
+      execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
       console.log(`  ${success(bold(svc.name))}`);
       started++;
     } catch (e) {
       try {
         try { execSync(`pm2 delete "${svc.name}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
-        const envOpts = svc.env ? svc.env.split(' ').map(e => `--env ${e}`).join(' ') : '';
-        execSync(`pm2 start ${svc.script} --name ${svc.name} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+        const envOpts = buildPm2EnvFlags(svc.env);
+        execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
         console.log(`  ${success(`${bold(svc.name)} ${dim('(started after cleanup)')}`)}`);
         started++;
       } catch (e2) {
@@ -231,24 +283,5 @@ export function stopServices() {
 
 export function restartServices() {
   console.log(heading('Restarting Zylos services...'));
-  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
-  try {
-    restartFromEcosystem(services, { stdio: 'inherit', save: true });
-    console.log(success('Services restarted.'));
-  } catch (e) {
-    const ecosystemPath = getCoreEcosystemPath();
-    try {
-      for (const name of services) {
-        restartManagedProcess(name, {
-          ecosystemPath,
-          stdio: 'inherit',
-          fallbackToPlainRestartOnError: true,
-        });
-      }
-      execSync('pm2 save 2>/dev/null', { stdio: 'inherit' });
-      console.log(success('Services restarted with plain PM2 fallback.'));
-    } catch {
-      console.error(error('Failed to restart services'));
-    }
-  }
+  restartServicesWithDeps();
 }

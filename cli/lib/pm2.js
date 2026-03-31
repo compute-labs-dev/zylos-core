@@ -24,6 +24,8 @@ export function createPm2Helpers({
       exec(`pm2 start "${ecosystemPath}" --only "${name}" 2>/dev/null`, { stdio });
     }
 
+    // Persist only after every restart succeeded so callers don't save a
+    // partially-updated PM2 process list.
     if (save) {
       exec('pm2 save 2>/dev/null', { stdio });
     }
