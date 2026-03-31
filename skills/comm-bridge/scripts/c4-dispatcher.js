@@ -552,7 +552,12 @@ async function processNextMessage() {
   }
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
-  const deliveryContent = item.content || '';
+  // Prefix control messages with "Meanwhile, " so the agent treats them as
+  // concurrent background tasks that should not interrupt the user's active work.
+  // Skip for slash commands (e.g. /exit, /clear) which must be delivered verbatim.
+  const rawContent = item.content || '';
+  const isSlashCommand = rawContent.startsWith('/');
+  const deliveryContent = (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
   const result = await sendToTmux(deliveryContent, {
     strictVerify: item.type === 'conversation'
   });
