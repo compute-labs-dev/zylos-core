@@ -213,7 +213,7 @@ fast API error 检测：
 | Daily memory commit | 每天 03:00 | 无 health 门控 | 直接执行 `zylos-memory/scripts/daily-commit.js` |
 | Daily upgrade | 每天 05:00 | `health=ok` 且 `daily_upgrade_enabled=true` | enqueue `upgrade-claude` 控制消息（默认关闭） |
 | Daily upgrade check | 每天 06:00 | `health=ok` | 后台 spawn `upgrade-check.js`，检查 core/components 可升级版本并通知 |
-| Usage monitor | 配置化周期（默认 1h） | Claude + idle + 活跃时段 + 无 pending 控制消息 | 自动 `/usage` 解析并按阈值告警 |
+| Usage monitor | 配置化周期（默认 1h） | `usage_monitor_enabled=true` + Claude/Codex idle + 活跃时段 + 无 pending 控制消息 | 读取本地 usage 快照（Claude: `statusline.json`/`usage.json`; Codex: `usage-codex.json`，必要时 fallback rollout）并按阈值告警 |
 
 ### 9.1 Memory Sync 触发职责拆分
 
