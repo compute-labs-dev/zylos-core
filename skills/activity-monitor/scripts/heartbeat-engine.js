@@ -219,11 +219,6 @@ export class HeartbeatEngine {
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
-    if (!this.heartbeatEnabled) {
-      if (pending) this.deps.clearHeartbeatPending();
-      return;
-    }
-
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
 
@@ -269,8 +264,8 @@ export class HeartbeatEngine {
     }
 
     // Rate-limited recovery: must be checked BEFORE the !agentRunning early
-    // return. After cooldown expires Claude is not running (tmux was killed),
-    // so the early return would skip this block and cause a deadlock (#252).
+    // return — after cooldown expires the agent is not running (tmux was killed),
+    // so the early return would skip this block and cause a deadlock.
     if (this.healthState === 'rate_limited') {
       if (currentTime < this.cooldownUntil) {
         return;
@@ -330,7 +325,10 @@ export class HeartbeatEngine {
       return;
     }
 
-    if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
+    // Only routine polling heartbeat is gated on heartbeatEnabled.
+    // All other paths (rate_limited recovery, recovering retry, down-state probe,
+    // signal acceleration) are special-purpose and must run regardless.
+    if (this.heartbeatEnabled && (currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
   }
