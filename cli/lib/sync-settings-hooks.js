@@ -47,6 +47,28 @@ export function syncTemplateModelSetting({
   return { changed: true };
 }
 
+/**
+ * Backfill a single top-level setting from the template when the installed
+ * config does not already have it.  Used for boolean flags like
+ * autoMemoryEnabled / autoDreamEnabled.
+ */
+export function syncTemplateSetting(key, {
+  templateSettings,
+  installedSettings,
+  dryRun = false,
+  log = console.log,
+} = {}) {
+  if (!Object.hasOwn(templateSettings, key) || Object.hasOwn(installedSettings, key)) {
+    return { changed: false };
+  }
+
+  if (!dryRun) {
+    installedSettings[key] = templateSettings[key];
+  }
+  log(`  + ${key}: ${templateSettings[key]}`);
+  return { changed: true };
+}
+
 export function shouldSyncCodexConfig({
   cfg = getZylosConfig(),
   homeDir = os.homedir(),
@@ -330,19 +352,31 @@ export function main(argv = process.argv.slice(2)) {
     dryRun,
   });
 
+  // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
+  const backfillKeys = ['autoMemoryEnabled', 'autoDreamEnabled'];
+  let settingsBackfilled = false;
+  for (const key of backfillKeys) {
+    const result = syncTemplateSetting(key, {
+      templateSettings,
+      installedSettings,
+      dryRun,
+    });
+    if (result.changed) settingsBackfilled = true;
+  }
+
   const codexSync = syncCodexConfig({ dryRun });
   if (codexSync.fatal) {
     console.error(codexSync.error);
     process.exit(1);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !codexSync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
     return;
   }
 
@@ -350,12 +384,12 @@ export function main(argv = process.argv.slice(2)) {
   const dir = path.dirname(INSTALLED_SETTINGS);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(INSTALLED_SETTINGS, JSON.stringify(installedSettings, null, 2) + '\n');
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
 
   // Enqueue restart when hooks changed — this runs from the NEWLY installed
   // package during upgrade (via resolveInstalledSyncScript), so it works even

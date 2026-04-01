@@ -210,3 +210,75 @@ describe('Claude model migration hints', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+describe('Boolean setting migration hints (autoMemoryEnabled, autoDreamEnabled)', () => {
+  it('adds setting_backfill hints when installed settings omit them', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-setting-hints-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'),
+      JSON.stringify({ autoMemoryEnabled: false, autoDreamEnabled: false }), 'utf8');
+    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: {} }), 'utf8');
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+    const settingHints = hints.filter((h) => h.type === 'setting_backfill');
+    assert.equal(settingHints.length, 2);
+    assert.deepEqual(settingHints[0], { type: 'setting_backfill', key: 'autoMemoryEnabled', value: false });
+    assert.deepEqual(settingHints[1], { type: 'setting_backfill', key: 'autoDreamEnabled', value: false });
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does not add hints when user already configured the settings', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-setting-nohint-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'),
+      JSON.stringify({ autoMemoryEnabled: false, autoDreamEnabled: false }), 'utf8');
+    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'),
+      JSON.stringify({ autoMemoryEnabled: true, autoDreamEnabled: true }), 'utf8');
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+    assert.equal(hints.some((h) => h.type === 'setting_backfill'), false);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('backfills settings during applyMigrationHints only when absent', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-setting-apply-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ hooks: {} }) + '\n', 'utf8');
+
+    const result = applyMigrationHints([
+      { type: 'setting_backfill', key: 'autoMemoryEnabled', value: false },
+      { type: 'setting_backfill', key: 'autoDreamEnabled', value: false },
+    ], { zylosDir });
+    const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    assert.equal(result.applied, 2);
+    assert.equal(updated.autoMemoryEnabled, false);
+    assert.equal(updated.autoDreamEnabled, false);
+
+    // User-configured values should be preserved
+    fs.writeFileSync(settingsPath, JSON.stringify({ autoMemoryEnabled: true, autoDreamEnabled: true }) + '\n', 'utf8');
+    const preserved = applyMigrationHints([
+      { type: 'setting_backfill', key: 'autoMemoryEnabled', value: false },
+      { type: 'setting_backfill', key: 'autoDreamEnabled', value: false },
+    ], { zylosDir });
+    const preservedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    assert.equal(preserved.applied, 0);
+    assert.equal(preservedSettings.autoMemoryEnabled, true);
+    assert.equal(preservedSettings.autoDreamEnabled, true);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

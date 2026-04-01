@@ -1,5 +1,7 @@
 {
   "model": "opus",
+  "autoMemoryEnabled": false,
+  "autoDreamEnabled": false,
   "hooks": {
     "SessionStart": [
       {
