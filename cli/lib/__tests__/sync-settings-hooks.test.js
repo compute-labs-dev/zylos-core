@@ -9,6 +9,7 @@ const {
   shouldSyncCodexConfig,
   syncCodexConfig,
   syncHooks,
+  syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
 
@@ -19,6 +20,12 @@ describe('Claude settings template', () => {
   it('defaults fresh installs to the Opus model', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
     assert.equal(template.model, 'opus');
+  });
+
+  it('disables autoMemoryEnabled and autoDreamEnabled by default', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    assert.equal(template.autoMemoryEnabled, false);
+    assert.equal(template.autoDreamEnabled, false);
   });
 });
 
@@ -51,6 +58,48 @@ describe('syncTemplateModelSetting', () => {
 
     assert.equal(result.changed, false);
     assert.equal(installedSettings.model, 'sonnet');
+  });
+});
+
+describe('syncTemplateSetting', () => {
+  it('backfills a missing setting from template', () => {
+    const installedSettings = {};
+    const logs = [];
+
+    const result = syncTemplateSetting('autoMemoryEnabled', {
+      templateSettings: { autoMemoryEnabled: false },
+      installedSettings,
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(installedSettings.autoMemoryEnabled, false);
+    assert.deepEqual(logs, ['  + autoMemoryEnabled: false']);
+  });
+
+  it('preserves an existing user-configured setting', () => {
+    const installedSettings = { autoDreamEnabled: true };
+
+    const result = syncTemplateSetting('autoDreamEnabled', {
+      templateSettings: { autoDreamEnabled: false },
+      installedSettings,
+      log: () => { throw new Error('should not log'); },
+    });
+
+    assert.equal(result.changed, false);
+    assert.equal(installedSettings.autoDreamEnabled, true);
+  });
+
+  it('skips when template does not have the key', () => {
+    const installedSettings = {};
+
+    const result = syncTemplateSetting('nonExistent', {
+      templateSettings: {},
+      installedSettings,
+      log: () => { throw new Error('should not log'); },
+    });
+
+    assert.equal(result.changed, false);
   });
 });
 

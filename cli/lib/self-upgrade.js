@@ -488,6 +488,17 @@ export function generateMigrationHints(templatesDir, deps = {}) {
     });
   }
 
+  // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
+  for (const key of ['autoMemoryEnabled', 'autoDreamEnabled']) {
+    if (Object.hasOwn(templateSettings, key) && !Object.hasOwn(installedSettings, key)) {
+      hints.push({
+        type: 'setting_backfill',
+        key,
+        value: templateSettings[key],
+      });
+    }
+  }
+
   // --- Reverse pass: detect removed hooks (core skills only) ---
   for (const [event, matchers] of Object.entries(installedHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -941,6 +952,12 @@ export function applyMigrationHints(hints, deps = {}) {
       } else if (hint.type === 'model_backfill') {
         if (!Object.hasOwn(settings, 'model')) {
           settings.model = hint.value;
+          result.applied++;
+        }
+
+      } else if (hint.type === 'setting_backfill') {
+        if (!Object.hasOwn(settings, hint.key)) {
+          settings[hint.key] = hint.value;
           result.applied++;
         }
 
