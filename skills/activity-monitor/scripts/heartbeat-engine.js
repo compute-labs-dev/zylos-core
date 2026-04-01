@@ -114,8 +114,20 @@ export class HeartbeatEngine {
     if (now - this.lastRateLimitedRestartAt < this.rateLimitedRestartInterval) {
       return false;
     }
-    this.lastRateLimitedRestartAt = now;
+    // Don't set lastRateLimitedRestartAt here — caller must call
+    // recordRateLimitedRestart() when the restart actually happens.
+    // Setting it here would waste the throttle window when the caller's
+    // own conditions (e.g. notRunningCount < restartDelay) prevent restart.
     return true;
+  }
+
+  /**
+   * Record that a rate-limited restart was actually initiated.
+   * Must be called by the Guardian after canRestart() returns true
+   * AND the restart is actually performed.
+   */
+  recordRateLimitedRestart() {
+    this.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000);
   }
 
   setHealth(nextHealth, reason = '', metadata = null) {

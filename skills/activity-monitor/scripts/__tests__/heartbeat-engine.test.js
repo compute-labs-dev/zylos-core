@@ -1070,15 +1070,29 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.canRestart(), true);
     });
 
-    it('throttles second restart in rate_limited state within interval', () => {
+    it('canRestart stays true until recordRateLimitedRestart is called', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps, {
         initialHealth: 'rate_limited',
         rateLimitedRestartInterval: 300
       });
-      // First call sets lastRateLimitedRestartAt
+      // Multiple canRestart calls without recording should all return true
       assert.equal(engine.canRestart(), true);
-      // Second call within 300s window should be throttled
+      assert.equal(engine.canRestart(), true);
+      // After recording, throttle kicks in
+      engine.recordRateLimitedRestart();
+      assert.equal(engine.canRestart(), false);
+    });
+
+    it('throttles restart after recordRateLimitedRestart within interval', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      assert.equal(engine.canRestart(), true);
+      engine.recordRateLimitedRestart();
+      // Within 300s window should be throttled
       assert.equal(engine.canRestart(), false);
     });
 
@@ -1088,8 +1102,8 @@ describe('HeartbeatEngine', () => {
         initialHealth: 'rate_limited',
         rateLimitedRestartInterval: 300
       });
-      // First call
       assert.equal(engine.canRestart(), true);
+      engine.recordRateLimitedRestart();
       // Simulate time passing beyond throttle interval
       engine.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000) - 301;
       assert.equal(engine.canRestart(), true);

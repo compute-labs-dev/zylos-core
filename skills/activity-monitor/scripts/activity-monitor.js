@@ -1262,6 +1262,7 @@ async function monitorLoop() {
       if (Date.now() < authRetrySuppressedUntil) {
         if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
       } else {
+        engine.recordRateLimitedRestart();
         log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
         startAgent();
       }
@@ -1317,6 +1318,7 @@ async function monitorLoop() {
       if (Date.now() < authRetrySuppressedUntil) {
         if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
       } else {
+        engine.recordRateLimitedRestart();
         log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
         startAgent();
       }
