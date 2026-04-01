@@ -223,6 +223,7 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
+const RATE_LIMIT_SCAN_INTERVAL = 30; // seconds between proactive rate limit scans (tmux text only, no AI tokens)
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 86400; // 24 hours
@@ -301,6 +302,7 @@ let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
+let lastRateLimitScanAt = 0;
 let lastDeadApiPid = null;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
@@ -1423,9 +1425,24 @@ async function monitorLoop() {
     }
   }
 
-  // Rate-limit detection is now handled inside HeartbeatEngine.onHeartbeatFailure
-  // via the detectRateLimit dep callback (dual-signal: heartbeat failure + tmux text).
-  // This eliminates false positives from conversation content matching rate-limit patterns.
+  // Proactive rate limit scan: detect rate limit text in tmux pane independently of
+  // heartbeat state. This is the primary detection path when heartbeat is disabled
+  // (the default). Pure tmux text scan — no AI tokens consumed.
+  // Skipped during launch grace period (session still initializing).
+  if (engine.health === 'ok' && engine.deps.detectRateLimit) {
+    const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
+    if (!withinGrace && (currentTime - lastRateLimitScanAt) >= RATE_LIMIT_SCAN_INTERVAL) {
+      lastRateLimitScanAt = currentTime;
+      const rateLimit = engine.deps.detectRateLimit();
+      if (rateLimit.detected) {
+        log(`Proactive rate limit scan: detected (reason: ${rateLimit.reason ?? 'rate_limited'}, resetTime: ${rateLimit.resetTime || 'unknown'})`);
+        engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
+          reason: rateLimit.reason ?? 'rate_limited',
+          detail: rateLimit.detail ?? ''
+        });
+      }
+    }
+  }
 
   // User message triggered recovery: when a user sends a message while unavailable,
   // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
