@@ -117,7 +117,7 @@ export function createCodexProbe({
      * @returns {{ detected: boolean, cooldownUntil?: number, resetTime?: string, reason?: string, detail?: string }}
      */
     detectRateLimit() {
-      const pane = _captureTmuxPane(tmuxSession);
+      const pane = _captureTmuxPane(tmuxSession, 10);
       if (!pane) return { detected: false };
       return detectCodexLimitFromPane(pane);
     },
@@ -147,9 +147,10 @@ export function createCodexProbe({
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
-function _captureTmuxPane(session) {
+function _captureTmuxPane(session, lastLines = 0) {
   try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
+    const startArg = lastLines > 0 ? `-S -${lastLines} ` : '';
+    return execSync(`tmux capture-pane -p ${startArg}-t "${session}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
   } catch {
     return null;
   }

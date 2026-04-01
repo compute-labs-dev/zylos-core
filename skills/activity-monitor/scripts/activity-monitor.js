@@ -303,6 +303,7 @@ let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let lastRateLimitScanAt = 0;
+let rateLimitConsecutiveHits = 0;  // consecutive scans that detected rate limit text
 let lastDeadApiPid = null;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
@@ -1425,21 +1426,29 @@ async function monitorLoop() {
     }
   }
 
-  // Proactive rate limit scan: detect rate limit text in tmux pane independently of
-  // heartbeat state. This is the primary detection path when heartbeat is disabled
-  // (the default). Pure tmux text scan — no AI tokens consumed.
-  // Skipped during launch grace period (session still initializing).
+  // Proactive rate limit scan: detect rate limit text in tmux pane (last 10 lines only)
+  // independently of heartbeat state. Requires 2 consecutive detections (30s apart) to
+  // avoid false positives from conversation content quoting rate limit text.
+  // Pure tmux text scan — no AI tokens consumed.
   if (engine.health === 'ok' && engine.deps.detectRateLimit) {
     const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
     if (!withinGrace && (currentTime - lastRateLimitScanAt) >= RATE_LIMIT_SCAN_INTERVAL) {
       lastRateLimitScanAt = currentTime;
       const rateLimit = engine.deps.detectRateLimit();
       if (rateLimit.detected) {
-        log(`Proactive rate limit scan: detected (reason: ${rateLimit.reason ?? 'rate_limited'}, resetTime: ${rateLimit.resetTime || 'unknown'})`);
-        engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
-          reason: rateLimit.reason ?? 'rate_limited',
-          detail: rateLimit.detail ?? ''
-        });
+        rateLimitConsecutiveHits++;
+        if (rateLimitConsecutiveHits >= 2) {
+          log(`Proactive rate limit scan: confirmed after ${rateLimitConsecutiveHits} consecutive hits (reason: ${rateLimit.reason ?? 'rate_limited'}, resetTime: ${rateLimit.resetTime || 'unknown'})`);
+          engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
+            reason: rateLimit.reason ?? 'rate_limited',
+            detail: rateLimit.detail ?? ''
+          });
+          rateLimitConsecutiveHits = 0;
+        } else {
+          log(`Proactive rate limit scan: detected (${rateLimitConsecutiveHits}/2, confirming on next scan)`);
+        }
+      } else {
+        rateLimitConsecutiveHits = 0;
       }
     }
   }
