@@ -23,7 +23,7 @@ describe('codex-probe detectCodexLimitFromPane', () => {
 
   it('detects usage limit with smart quotes', () => {
     const result = detectCodexLimitFromPane(
-      'You\u2019ve hit your usage limit. Try again later.'
+      'You\u2019ve hit your usage limit. To get more access now, send a request to your admin.'
     );
     assert.equal(result.detected, true);
     assert.equal(result.reason, 'codex_usage_limit');
@@ -31,6 +31,13 @@ describe('codex-probe detectCodexLimitFromPane', () => {
 
   it('ignores unrelated pane text', () => {
     const result = detectCodexLimitFromPane('All good. Codex is waiting for input.');
+    assert.deepStrictEqual(result, { detected: false });
+  });
+
+  it('ignores usage limit text quoted in conversation', () => {
+    // Conversation content that merely discusses the limit text should not trigger detection
+    const pane = 'User: What does "You\'ve hit your usage limit" mean?\nAssistant: It means your quota is exhausted.';
+    const result = detectCodexLimitFromPane(pane);
     assert.deepStrictEqual(result, { detected: false });
   });
 });

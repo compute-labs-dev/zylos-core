@@ -1522,7 +1522,11 @@ function init() {
   procSampler = new ProcSampler({ sessionName: adapter.sessionName, log });
 
   const initialStatus = loadInitialHealth();
-  const initialHealth = heartbeatEnabled ? initialStatus.health : 'ok';
+  // When heartbeat is disabled, default to 'ok' — except preserve 'rate_limited'
+  // state across restarts so the proactive scan doesn't briefly clear a valid cooldown.
+  const initialHealth = heartbeatEnabled
+    ? initialStatus.health
+    : (initialStatus.health === 'rate_limited' ? 'rate_limited' : 'ok');
 
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,

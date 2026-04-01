@@ -160,7 +160,9 @@ export function detectCodexLimitFromPane(pane) {
 
   // Confirmed pattern from Codex CLI (OpenAI):
   // "■ You've hit your usage limit. To get more access now, send a request to your admin or try again at Apr 2nd, 2026\n2:41 AM."
-  if (/you[''\u2019]ve hit your usage limit/i.test(pane)) {
+  // Require surrounding context (admin/try again) to avoid false positives from
+  // conversation content that merely quotes/discusses the usage limit text.
+  if (/you[''\u2019]ve hit your usage limit[\s\S]*?(?:send a request to your admin|try again)/i.test(pane)) {
     const now = Math.floor(Date.now() / 1000);
     const resetTime = _parseCodexResetTime(pane);
     const cooldownUntil = resetTime.epoch || (now + 3600);
