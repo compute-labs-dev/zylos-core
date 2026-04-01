@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v26 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor + ProcSampler
+ * Activity Monitor v28 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor + ProcSampler
+ *
+ * v28 changes (file-backed usage monitor only):
+ *   - Removed Claude/Codex usage sidecar probing from the runtime input path
+ *   - Usage monitor now reads Claude snapshots from statusline/usage.json and Codex
+ *     snapshots from usage-codex.json, with rollout fallback only for Codex
+ *   - Added usage_monitor_enabled gate so usage polling remains opt-in
+ *   - Logs the selected usage source and notification suppression decisions
  *
  * v27 changes (proactive API error scan):
  *   - monitorLoop scans tmux pane every 15s for fatal API errors (400, invalid_request_error)
@@ -40,8 +47,6 @@
  *   - runC4Control() (node c4-control.js): 10000ms
  *   - sendRecoveryNotice() and context rotation notify (node c4-send.js): 15000ms
  *   - SQLite COUNT query in maybeCheckUsage(): 3000ms
- *   - Replaced execSync('sleep 0.3') in /usage check with a state machine tick
- *     (new 'pre_enter' phase) to eliminate synchronous blocking of the event loop
  *
  * v22 changes (service recovery — auth + periodic probe):
  *   - checkAuth() in ClaudeAdapter/CodexAdapter is now a live probe (CLI subprocess / HTTP)
@@ -82,9 +87,7 @@
  *   - Process signal acceleration: agentRunning false→true + 30s grace → immediate probe
  *
  * v17 changes (plan usage monitoring — #206):
- *   - Add usage monitoring: periodically checks /usage via tmux capture during idle
- *   - State machine: idle → sent → waiting → capture → idle
- *   - Parses session, weekly (all models), weekly (Sonnet) percentages
+ *   - Add usage monitoring for session / weekly plan consumption snapshots
  *   - Threshold notifications: 70% warning, 85% high, 95% critical
  *   - Only checks during active hours (8–23) when Claude is idle ≥30s and C4 queue empty
  *   - Persists usage data to ~/zylos/activity-monitor/usage.json
@@ -132,14 +135,14 @@ import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
-import { runUsageProbe } from './usage-probe-runner.js';
-import { runCodexStatusProbe } from './usage-codex-probe-runner.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
-import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
-import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
+import {
+  readClaudeUsageFromMonitorFiles,
+  readCodexUsageFromMonitorFile
+} from './usage-monitor-file-reader.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -178,6 +181,7 @@ const __dirname = path.dirname(__filename);
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const STATUS_FILE = path.join(MONITOR_DIR, 'agent-status.json');
+const STATUSLINE_FILE = path.join(MONITOR_DIR, 'statusline.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
@@ -187,8 +191,6 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
-const USAGE_PROBE_LOCK_FILE = path.join(MONITOR_DIR, 'usage-probe.lock');
-const USAGE_CODEX_PROBE_LOCK_FILE = path.join(MONITOR_DIR, 'usage-codex-probe.lock');
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -271,22 +273,15 @@ function readConfigObject() {
   }
 }
 
+const USAGE_MONITOR_ENABLED = readConfigBool('usage_monitor_enabled', false);
 const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 3600);     // seconds between checks (default 1 hour)
 const USAGE_IDLE_GATE = readConfigInt('usage_idle_gate', 30);                 // idle seconds required (default 30)
-const USAGE_CAPTURE_WAIT = readConfigInt('usage_capture_wait', 5);            // seconds to wait for UI render
 const USAGE_WARN_THRESHOLD = readConfigInt('usage_warn_threshold', 80);       // weekly % → warning
 const USAGE_HIGH_THRESHOLD = readConfigInt('usage_high_threshold', 90);       // weekly % → high alert
 const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); // weekly % → critical alert
 const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 14400);  // seconds between same-tier notifications (4 hours)
 const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
 const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
-const USAGE_PROBE_MODE = readConfigString('usage_probe_mode', 'auto').toLowerCase(); // auto | sidecar | legacy
-const USAGE_PROBE_TIMEOUT_SECONDS = readConfigInt('usage_probe_timeout_seconds', 20);
-const USAGE_PROBE_LOCK_TTL_SECONDS = readConfigInt('usage_probe_lock_ttl_seconds', 120);
-const USAGE_PROBE_FAILURE_BACKOFF_SECONDS = readConfigInt('usage_probe_failure_backoff_seconds', 600);
-const USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS = readConfigInt('usage_probe_unsupported_plan_backoff_seconds', 3600);
-const USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD = readConfigInt('usage_probe_circuit_breaker_threshold', 3);
-const USAGE_PROBE_CIRCUIT_BREAKER_SECONDS = readConfigInt('usage_probe_circuit_breaker_seconds', 1800);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -315,13 +310,7 @@ let engine;          // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
 
-// Usage monitoring state machine: 'idle' → 'sent' → 'waiting' → 'capture' → 'idle'
-let usageCheckPhase = 'idle';
-let usageCheckWaitCount = 0;
 let lastUsageCheckAt = 0;
-let usageProbeBackoffUntil = 0;
-let usageProbeCircuitUntil = 0;
-let usageProbeConsecutiveFailures = 0;
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -1014,45 +1003,6 @@ function getUsageStateFile() {
   return USAGE_STATE_FILE;
 }
 
-function getUsageProbeLockFile() {
-  if (adapter?.runtimeId === 'codex') return USAGE_CODEX_PROBE_LOCK_FILE;
-  return USAGE_PROBE_LOCK_FILE;
-}
-
-function captureTmuxPane() {
-  try {
-    return execSync(`tmux capture-pane -t "${adapter.sessionName}" -p 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
-  } catch {
-    return null;
-  }
-}
-
-function sendTmuxKeys(keys) {
-  try {
-    execSync(`tmux send-keys -t "${adapter.sessionName}" ${keys} 2>/dev/null`, { timeout: 3000 });
-  } catch { /* best-effort */ }
-}
-
-function parseUsageFromPane(paneContent) {
-  return parseUsageFromPaneCore(paneContent);
-}
-
-function getUsageProbeMode() {
-  if (USAGE_PROBE_MODE === 'legacy' || USAGE_PROBE_MODE === 'sidecar') {
-    return USAGE_PROBE_MODE;
-  }
-  return 'auto';
-}
-
-function tmuxSessionExists(sessionName) {
-  try {
-    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { timeout: 3000, stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function getPendingWorkCount() {
   try {
     const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
@@ -1070,20 +1020,7 @@ function getPendingWorkCount() {
 }
 
 function maybeCleanupUsageProbeSessions() {
-  // Sidecar sessions are disposable. On startup, clear any old leftovers.
-  try {
-    const out = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', {
-      encoding: 'utf8',
-      timeout: 3000
-    });
-    const sessions = out.split('\n').map(s => s.trim()).filter(Boolean);
-    for (const session of sessions) {
-      if (!session.startsWith('claude-usage-probe-') && !session.startsWith('codex-status-probe-')) continue;
-      try {
-        execSync(`tmux kill-session -t "${session}" 2>/dev/null`, { timeout: 3000, stdio: 'pipe' });
-      } catch { /* best effort */ }
-    }
-  } catch { /* no tmux sessions */ }
+  // Sidecar probing was removed for issue #470.
 }
 
 function getUsageTier(weeklyPercent) {
@@ -1150,452 +1087,123 @@ function sendUsageNotification(message) {
  * Only progresses when Claude is idle with no pending work.
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
-  if (adapter.runtimeId === 'codex') {
-    const shouldStart = shouldStartUsageCheck({
-      runtimeId: adapter.runtimeId,
-      allowedRuntimeIds: ['codex'],
-      claudeState,
-      idleSeconds,
-      currentTime,
-      lastUsageCheckAt,
-      checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
-      inPrompt: false,
-      promptUpdatedAt: 0,
-      localHour: getLocalHour(),
-      activeHoursStart: USAGE_ACTIVE_HOURS_START,
-      activeHoursEnd: USAGE_ACTIVE_HOURS_END,
-      pendingQueueCount: getPendingWorkCount(),
-      lockBusy: false,
-      backoffUntil: usageProbeBackoffUntil,
-      circuitUntil: usageProbeCircuitUntil,
+  if (!USAGE_MONITOR_ENABLED) return;
+  if (adapter.runtimeId !== 'claude' && adapter.runtimeId !== 'codex') return;
+
+  const promptUpdatedAt = apiActivity?.updated_at
+    ? Math.floor(apiActivity.updated_at / 1000) : 0;
+  const shouldStart = shouldStartUsageCheck({
+    runtimeId: adapter.runtimeId,
+    allowedRuntimeIds: ['claude', 'codex'],
+    claudeState,
+    idleSeconds,
+    currentTime,
+    lastUsageCheckAt,
+    checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
+    inPrompt: adapter.runtimeId === 'claude' ? Boolean(apiActivity?.in_prompt) : false,
+    promptUpdatedAt,
+    localHour: getLocalHour(),
+    activeHoursStart: USAGE_ACTIVE_HOURS_START,
+    activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+    pendingQueueCount: getPendingWorkCount(),
+    lockBusy: false,
+    backoffUntil: 0,
+    circuitUntil: 0,
+  });
+  if (!shouldStart) return;
+
+  let snapshot = null;
+  let source = null;
+  if (adapter.runtimeId === 'claude') {
+    snapshot = readClaudeUsageFromMonitorFiles({
+      statuslineFile: STATUSLINE_FILE,
+      usageStateFile: USAGE_STATE_FILE
     });
-
-    if (!shouldStart) return;
-
-    const rolloutStatus = readCodexUsageFromActiveRollout();
-    if (rolloutStatus) {
-      usageProbeConsecutiveFailures = 0;
-      usageProbeBackoffUntil = 0;
-      usageProbeCircuitUntil = 0;
-
-      const usage = {
-        session: rolloutStatus.sessionPercent,
-        sessionResets: rolloutStatus.sessionResets,
-        weeklyAll: rolloutStatus.weeklyAllPercent,
-        weeklyAllResets: rolloutStatus.weeklyAllResets,
-        weeklySonnet: null,
-        weeklySonnetResets: null,
-        fiveHour: rolloutStatus.fiveHourPercent,
-        fiveHourResets: rolloutStatus.fiveHourResets
-      };
-      const prevState = loadUsageState();
-      const now = new Date().toISOString();
-      const tierMetric = usage.weeklyAll ?? usage.session;
-      const tier = getUsageTier(tierMetric ?? 0);
-
-      const usageData = {
-        lastCheck: now,
-        lastCheckEpoch: currentTime,
-        session: { percent: usage.session, resets: usage.sessionResets },
-        weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
-        weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
-        fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
-        tier,
-        statusShape: rolloutStatus.statusShape,
-        probeReason: 'rollout_rate_limits',
-        probeDurationMs: 0,
-        probeAt: now,
-        lastNotifiedTier: prevState?.lastNotifiedTier || null,
-        lastNotifiedAt: prevState?.lastNotifiedAt || null
-      };
-
-      log(
-        `Usage monitor (codex): session=${usage.session ?? 'null'}% ` +
-        `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% ` +
-        `tier=${tier} shape=${rolloutStatus.statusShape}`
-      );
-
-      if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
-        const prevTier = prevState?.lastNotifiedTier;
-        const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
-        const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-        const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
-
-        if (tierEscalated || cooldownExpired) {
-          const message = formatUsageNotification(usage, tier);
-          sendUsageNotification(message);
-          usageData.lastNotifiedTier = tier;
-          usageData.lastNotifiedAt = now;
-        }
-      }
-
-      writeUsageState(usageData);
-      lastUsageCheckAt = currentTime;
-      return;
-    }
-
-    const probeSessionName = `codex-status-probe-${process.pid}-${Date.now()}`;
-    const lockResult = acquireUsageProbeLock({
-      lockFile: getUsageProbeLockFile(),
-      ttlSeconds: USAGE_PROBE_LOCK_TTL_SECONDS,
-      sessionName: probeSessionName,
-      sessionExistsFn: tmuxSessionExists
+    source = snapshot?.statusShape || 'none';
+  } else {
+    snapshot = readCodexUsageFromMonitorFile({
+      usageStateFile: USAGE_CODEX_STATE_FILE
     });
+    source = snapshot?.statusShape || 'usage-codex-missing';
 
-    if (!lockResult.ok) {
-      if (lockResult.reason === 'lock_busy') return;
-      usageProbeConsecutiveFailures += 1;
-      usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
-      lastUsageCheckAt = currentTime;
-      log(`Usage monitor (codex): sidecar lock error (${lockResult.reason})`);
-      return;
-    }
-
-    let probeResult;
-    try {
-      log('Usage monitor (codex): initiating sidecar /status check');
-      probeResult = runCodexStatusProbe({
-        zylosDir: ZYLOS_DIR,
-        timeoutSeconds: USAGE_PROBE_TIMEOUT_SECONDS,
-        captureWaitSeconds: USAGE_CAPTURE_WAIT,
-        sessionName: probeSessionName,
-      });
-    } finally {
-      releaseUsageProbeLock({
-        lockFile: getUsageProbeLockFile(),
-        token: lockResult.token
-      });
-    }
-
-    if (!probeResult.ok) {
-      usageProbeConsecutiveFailures += 1;
-      if (probeResult.reason === 'timeout' || probeResult.reason === 'sidecar_error') {
-        usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
-      }
-      if (usageProbeConsecutiveFailures >= USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD) {
-        usageProbeCircuitUntil = currentTime + USAGE_PROBE_CIRCUIT_BREAKER_SECONDS;
-        usageProbeConsecutiveFailures = 0;
-        log(`Usage monitor (codex): circuit open for ${USAGE_PROBE_CIRCUIT_BREAKER_SECONDS}s`);
-      }
-      lastUsageCheckAt = currentTime;
-      log(`Usage monitor (codex): sidecar probe failed (${probeResult.reason})`);
-      return;
-    }
-
-    usageProbeConsecutiveFailures = 0;
-    usageProbeBackoffUntil = 0;
-    usageProbeCircuitUntil = 0;
-
-    const status = probeResult.status;
-    const usage = {
-      session: status.sessionPercent,
-      sessionResets: null,
-      weeklyAll: status.weeklyAllPercent,
-      weeklyAllResets: status.weeklyAllResets,
-      weeklySonnet: null,
-      weeklySonnetResets: null,
-      fiveHour: status.fiveHourPercent,
-      fiveHourResets: status.fiveHourResets
-    };
-    const prevState = loadUsageState();
-    const now = new Date().toISOString();
-    const tierMetric = usage.weeklyAll ?? usage.session;
-    const tier = getUsageTier(tierMetric ?? 0);
-
-    const usageData = {
-      lastCheck: now,
-      lastCheckEpoch: currentTime,
-      session: { percent: usage.session, resets: usage.sessionResets },
-      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
-      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
-      fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
-      tier,
-      statusShape: status.statusShape,
-      probeReason: probeResult.reason,
-      probeDurationMs: probeResult.durationMs,
-      probeAt: now,
-      lastNotifiedTier: prevState?.lastNotifiedTier || null,
-      lastNotifiedAt: prevState?.lastNotifiedAt || null
-    };
-
-    log(
-      `Usage monitor (codex): session=${usage.session ?? 'null'}% ` +
-      `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% ` +
-      `tier=${tier} shape=${status.statusShape}`
-    );
-
-    if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
-      const prevTier = prevState?.lastNotifiedTier;
-      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
-      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
-
-      if (tierEscalated || cooldownExpired) {
-        const message = formatUsageNotification(usage, tier);
-        sendUsageNotification(message);
-        usageData.lastNotifiedTier = tier;
-        usageData.lastNotifiedAt = now;
+    if (!snapshot) {
+      const rolloutStatus = readCodexUsageFromActiveRollout();
+      if (rolloutStatus) {
+        snapshot = {
+          sessionPercent: rolloutStatus.sessionPercent,
+          sessionResets: rolloutStatus.sessionResets,
+          weeklyAllPercent: rolloutStatus.weeklyAllPercent,
+          weeklyAllResets: rolloutStatus.weeklyAllResets,
+          weeklySonnetPercent: null,
+          weeklySonnetResets: null,
+          fiveHourPercent: rolloutStatus.fiveHourPercent,
+          fiveHourResets: rolloutStatus.fiveHourResets,
+          statusShape: 'rollout_fallback'
+        };
+        source = snapshot.statusShape;
+        log('Usage monitor (codex): usage-codex.json unavailable, falling back to rollout reader');
       }
     }
+  }
 
-    writeUsageState(usageData);
+  if (!snapshot) {
+    log(`Usage monitor (${adapter.runtimeId}): no local usage snapshot available`);
     lastUsageCheckAt = currentTime;
     return;
   }
 
-  // /usage is a Claude Code-only slash command — skip for other runtimes
-  if (adapter.runtimeId !== 'claude') return;
+  const usage = {
+    session: snapshot.sessionPercent,
+    sessionResets: snapshot.sessionResets,
+    weeklyAll: snapshot.weeklyAllPercent,
+    weeklyAllResets: snapshot.weeklyAllResets,
+    weeklySonnet: snapshot.weeklySonnetPercent,
+    weeklySonnetResets: snapshot.weeklySonnetResets,
+    fiveHour: snapshot.fiveHourPercent,
+    fiveHourResets: snapshot.fiveHourResets
+  };
+  const prevState = loadUsageState();
+  const now = new Date().toISOString();
+  const tierMetric = usage.weeklyAll ?? usage.session;
+  const tier = getUsageTier(tierMetric ?? 0);
+  const prevTier = prevState?.lastNotifiedTier;
+  const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+  const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+  const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
 
-  const probeMode = getUsageProbeMode();
-  if (probeMode !== 'legacy') {
-    const promptUpdatedAt = apiActivity?.updated_at
-      ? Math.floor(apiActivity.updated_at / 1000) : 0;
+  const usageData = {
+    lastCheck: now,
+    lastCheckEpoch: currentTime,
+    session: { percent: usage.session, resets: usage.sessionResets },
+    weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+    weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+    fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
+    tier,
+    statusShape: source,
+    lastNotifiedTier: prevTier || null,
+    lastNotifiedAt: prevState?.lastNotifiedAt || null
+  };
 
-    const shouldStart = shouldStartUsageCheck({
-      runtimeId: adapter.runtimeId,
-      allowedRuntimeIds: ['claude'],
-      claudeState,
-      idleSeconds,
-      currentTime,
-      lastUsageCheckAt,
-      checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
-      inPrompt: Boolean(apiActivity?.in_prompt),
-      promptUpdatedAt,
-      localHour: getLocalHour(),
-      activeHoursStart: USAGE_ACTIVE_HOURS_START,
-      activeHoursEnd: USAGE_ACTIVE_HOURS_END,
-      pendingQueueCount: getPendingWorkCount(),
-      lockBusy: false,
-      backoffUntil: usageProbeBackoffUntil,
-      circuitUntil: usageProbeCircuitUntil,
-    });
+  log(
+    `Usage monitor (${adapter.runtimeId}): source=${source} session=${usage.session ?? 'null'}% ` +
+    `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% tier=${tier}`
+  );
 
-    if (!shouldStart) return;
-
-    const probeSessionName = `claude-usage-probe-${process.pid}-${Date.now()}`;
-    const lockResult = acquireUsageProbeLock({
-      lockFile: getUsageProbeLockFile(),
-      ttlSeconds: USAGE_PROBE_LOCK_TTL_SECONDS,
-      sessionName: probeSessionName,
-      sessionExistsFn: tmuxSessionExists
-    });
-
-    if (!lockResult.ok) {
-      if (lockResult.reason === 'lock_busy') return;
-      usageProbeConsecutiveFailures += 1;
-      usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
-      lastUsageCheckAt = currentTime;
-      log(`Usage monitor: sidecar lock error (${lockResult.reason})`);
-      return;
+  if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
+    if (tierEscalated || cooldownExpired) {
+      log(`Usage monitor (${adapter.runtimeId}): notifying owner for tier=${tier}`);
+      const message = formatUsageNotification(usage, tier);
+      sendUsageNotification(message);
+      usageData.lastNotifiedTier = tier;
+      usageData.lastNotifiedAt = now;
+    } else {
+      log(`Usage monitor (${adapter.runtimeId}): suppressing notification (cooldown active, tier=${tier})`);
     }
-
-    let probeResult;
-    try {
-      log(`Usage monitor: initiating sidecar check (${probeMode})`);
-      probeResult = runUsageProbe({
-        zylosDir: ZYLOS_DIR,
-        timeoutSeconds: USAGE_PROBE_TIMEOUT_SECONDS,
-        captureWaitSeconds: USAGE_CAPTURE_WAIT,
-        sessionName: probeSessionName,
-      });
-    } finally {
-      releaseUsageProbeLock({
-        lockFile: getUsageProbeLockFile(),
-        token: lockResult.token
-      });
-    }
-
-    if (!probeResult.ok) {
-      if (probeResult.reason === 'unsupported_plan') {
-        usageProbeConsecutiveFailures = 0;
-        usageProbeBackoffUntil = currentTime + USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS;
-        usageProbeCircuitUntil = 0;
-        lastUsageCheckAt = currentTime;
-        log(`Usage monitor: sidecar probe skipped (unsupported_plan; backoff=${USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS}s)`);
-        return;
-      }
-
-      usageProbeConsecutiveFailures += 1;
-      if (probeResult.reason === 'timeout' || probeResult.reason === 'sidecar_error') {
-        usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
-      }
-      if (usageProbeConsecutiveFailures >= USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD) {
-        usageProbeCircuitUntil = currentTime + USAGE_PROBE_CIRCUIT_BREAKER_SECONDS;
-        usageProbeConsecutiveFailures = 0;
-        log(`Usage monitor: circuit open for ${USAGE_PROBE_CIRCUIT_BREAKER_SECONDS}s`);
-      }
-      lastUsageCheckAt = currentTime;
-      log(`Usage monitor: sidecar probe failed (${probeResult.reason})`);
-      return;
-    }
-
-    usageProbeConsecutiveFailures = 0;
-    usageProbeBackoffUntil = 0;
-    usageProbeCircuitUntil = 0;
-
-    const usage = probeResult.usage;
-    const prevState = loadUsageState();
-    const now = new Date().toISOString();
-    const weeklyPercent = usage.weeklyAll ?? 0;
-    const tier = getUsageTier(weeklyPercent);
-
-    const usageData = {
-      lastCheck: now,
-      lastCheckEpoch: currentTime,
-      session: { percent: usage.session, resets: usage.sessionResets },
-      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
-      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
-      tier,
-      probeReason: probeResult.reason,
-      probeDurationMs: probeResult.durationMs,
-      probeAt: now,
-      lastNotifiedTier: prevState?.lastNotifiedTier || null,
-      lastNotifiedAt: prevState?.lastNotifiedAt || null
-    };
-
-    log(`Usage monitor: session=${usage.session}% weekly=${usage.weeklyAll}% sonnet=${usage.weeklySonnet}% tier=${tier}`);
-
-    if (tier !== 'ok') {
-      const prevTier = prevState?.lastNotifiedTier;
-      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
-      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
-
-      if (tierEscalated || cooldownExpired) {
-        const message = formatUsageNotification(usage, tier);
-        sendUsageNotification(message);
-        usageData.lastNotifiedTier = tier;
-        usageData.lastNotifiedAt = now;
-      }
-    }
-
-    writeUsageState(usageData);
-    lastUsageCheckAt = currentTime;
-    return;
   }
 
-  // Abort in-progress check if Claude becomes busy (e.g., message arrived
-  // during the wait window). The /usage UI may be overlaid or dismissed —
-  // send Escape defensively to clean up, then reset.
-  if (usageCheckPhase !== 'idle' && claudeState !== 'idle') {
-    log('Usage monitor: aborting check — Claude became busy');
-    sendTmuxKeys('Escape');
-    usageCheckPhase = 'idle';
-    return;
-  }
-
-  // Phase: pre_enter — one tick after /usage was sent, now send Enter
-  if (usageCheckPhase === 'pre_enter') {
-    sendTmuxKeys('Enter');
-    usageCheckPhase = 'sent';
-    return;
-  }
-
-  // Phase: sent/waiting/capture — continue the state machine
-  if (usageCheckPhase === 'sent') {
-    usageCheckPhase = 'waiting';
-    usageCheckWaitCount = 0;
-    return;
-  }
-
-  if (usageCheckPhase === 'waiting') {
-    usageCheckWaitCount += 1;
-    if (usageCheckWaitCount >= USAGE_CAPTURE_WAIT) {
-      usageCheckPhase = 'capture';
-    }
-    return;
-  }
-
-  if (usageCheckPhase === 'capture') {
-    const paneContent = captureTmuxPane();
-    usageCheckPhase = 'idle';
-
-    // Always dismiss the /usage dialog — it may show usage data, a rate-limit
-    // error, or any other overlay. Escape is safe to send regardless.
-    sendTmuxKeys('Escape');
-
-    const usage = parseUsageFromPane(paneContent);
-    if (!usage) {
-      log('Usage monitor: failed to parse /usage output (rate-limited or unavailable)');
-      // Prevent retrying too quickly
-      lastUsageCheckAt = Math.floor(Date.now() / 1000);
-      return;
-    }
-
-    const prevState = loadUsageState();
-    const now = new Date().toISOString();
-    const weeklyPercent = usage.weeklyAll ?? 0;
-    const tier = getUsageTier(weeklyPercent);
-
-    const usageData = {
-      lastCheck: now,
-      lastCheckEpoch: currentTime,
-      session: { percent: usage.session, resets: usage.sessionResets },
-      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
-      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
-      tier,
-      lastNotifiedTier: prevState?.lastNotifiedTier || null,
-      lastNotifiedAt: prevState?.lastNotifiedAt || null
-    };
-
-    log(`Usage monitor: session=${usage.session}% weekly=${usage.weeklyAll}% sonnet=${usage.weeklySonnet}% tier=${tier}`);
-
-    // Check if we should notify
-    if (tier !== 'ok') {
-      const prevTier = prevState?.lastNotifiedTier;
-      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
-      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
-
-      if (tierEscalated || cooldownExpired) {
-        const message = formatUsageNotification(usage, tier);
-        sendUsageNotification(message);
-        usageData.lastNotifiedTier = tier;
-        usageData.lastNotifiedAt = now;
-      }
-    }
-
-    writeUsageState(usageData);
-    lastUsageCheckAt = currentTime;
-    return;
-  }
-
-  // Phase: idle — check if we should start a new usage check
-  if (claudeState !== 'idle') return;
-  if (idleSeconds < USAGE_IDLE_GATE) return;
-  if ((currentTime - lastUsageCheckAt) < USAGE_CHECK_INTERVAL) return;
-
-  // Don't interrupt an active prompt (text generation between tool calls).
-  // Guard against stale in_prompt after a hard crash: ignore if the hook
-  // activity file hasn't been updated in 10 minutes (600s).
-  if (apiActivity?.in_prompt) {
-    const updatedAt = apiActivity?.updated_at
-      ? Math.floor(apiActivity.updated_at / 1000) : 0;
-    if ((currentTime - updatedAt) < 600) return;
-  }
-
-  // Only check during active hours
-  const hour = getLocalHour();
-  if (hour < USAGE_ACTIVE_HOURS_START || hour >= USAGE_ACTIVE_HOURS_END) return;
-
-  // Check if C4 queue has pending messages (don't interrupt if work is about to arrive)
-  try {
-    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
-    if (fs.existsSync(dbPath)) {
-      const count = execSync(
-        `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM control_queue WHERE status='pending'" 2>/dev/null`,
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
-      if (parseInt(count, 10) > 0) return; // Messages pending, skip check
-    }
-  } catch { /* proceed anyway */ }
-
-  // Start the check: send /usage to Claude.
-  // Enter is sent on the next tick (pre_enter phase) to avoid blocking the
-  // monitor loop with execSync('sleep 0.3').
-  log('Usage monitor: initiating /usage check');
-  sendTmuxKeys('"/usage"');
-  usageCheckPhase = 'pre_enter';
+  writeUsageState(usageData);
+  lastUsageCheckAt = currentTime;
+  return;
 }
 
 function tierRank(tier) {
@@ -1966,17 +1574,13 @@ function init() {
   });
 
   // Restore usage check timestamp from persisted state.
-  // Claude fresh installs keep the old delayed-first-check behavior, while
-  // Codex must allow an initial /status probe to create usage-codex.json.
   const usageState = loadUsageState();
   lastUsageCheckAt = getInitialUsageCheckAt({
     runtimeId: adapter.runtimeId,
     usageState,
     nowEpoch: Math.floor(Date.now() / 1000)
   });
-  if (getUsageProbeMode() !== 'legacy') {
-    maybeCleanupUsageProbeSessions();
-  }
+  log(`Usage monitor (${adapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
 
   // Start context monitor if the adapter provides one (Codex polling-based monitor).
   // Claude uses the statusLine hook instead — no adapter-provided monitor.
