@@ -104,6 +104,26 @@ function normalizeClaudeStatusline(status) {
         statusShape: 'statusline_rate_limits'
       };
     }
+
+    // Format B: five_hour/seven_day keys with used_percentage (Claude Code 2.1.x+)
+    const fiveHour = rateLimits.five_hour;
+    const sevenDay = rateLimits.seven_day;
+    const fiveHourPercent = fiveHour?.used_percentage ?? null;
+    const weeklyAllPercentB = sevenDay?.used_percentage ?? null;
+
+    if (fiveHourPercent != null || weeklyAllPercentB != null) {
+      return {
+        sessionPercent: status.context_window?.used_percentage ?? null,
+        sessionResets: null,
+        weeklyAllPercent: weeklyAllPercentB,
+        weeklyAllResets: formatResetTime(sevenDay?.resets_at ?? null),
+        weeklySonnetPercent: null,
+        weeklySonnetResets: null,
+        fiveHourPercent,
+        fiveHourResets: formatResetTime(fiveHour?.resets_at ?? null),
+        statusShape: 'statusline_rate_limits'
+      };
+    }
   }
 
   return normalizePersistedUsage(status, 'statusline_persisted_usage');
