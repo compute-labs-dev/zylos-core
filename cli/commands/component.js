@@ -227,6 +227,19 @@ export async function upgradeComponent(args) {
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
   const beta = args.includes('--beta');
+  const hasTempDirFlag = args.includes('--temp-dir');
+
+  if (hasTempDirFlag) {
+    const msg = '--temp-dir is not supported.';
+    if (jsonOutput) {
+      const errOutput = { action: 'upgrade', success: false, error: msg };
+      errOutput.reply = formatC4Reply('error', { message: msg });
+      console.log(JSON.stringify(errOutput, null, 2));
+    } else {
+      console.error(`Error: ${msg}`);
+    }
+    process.exit(1);
+  }
 
   // Parse --branch <name> flag
   const branchIndex = args.indexOf('--branch');
@@ -255,7 +268,7 @@ export async function upgradeComponent(args) {
   }
 
   // Get target component (filter out flags and flag values)
-  const flagsWithValues = new Set(['--temp-dir', '--branch', '--mode']);
+  const flagsWithValues = new Set(['--branch', '--mode']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
@@ -269,10 +282,7 @@ export async function upgradeComponent(args) {
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
-    // Parse --temp-dir flag (reuse previously downloaded package from --check)
-    const selfTempDirIdx = args.indexOf('--temp-dir');
-    const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
-    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch, beta, mode });
+    const ok = await upgradeSelfCore({ branch, beta, mode });
     if (!ok) process.exit(1);
     return;
   }
@@ -295,11 +305,10 @@ export async function upgradeComponent(args) {
     console.log('  --beta         Include prerelease (beta) versions');
     console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
     console.log('  --mode <m>     Merge mode: "merge" (default, smart three-way) or "overwrite"');
-    console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade --self --check --beta');
-    console.log('  zylos upgrade telegram --yes --temp-dir /tmp/zylos-xxx');
+    console.log('  zylos upgrade telegram --yes');
     console.log('  zylos upgrade telegram --mode overwrite');
     process.exit(1);
   }
@@ -340,43 +349,14 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  // Parse --temp-dir flag (reuse previously downloaded package)
-  const tempDirIdx = args.indexOf('--temp-dir');
-  const providedTempDir = tempDirIdx !== -1 ? args[tempDirIdx + 1] : null;
-
   // Mode 1: Check only (--check) — no lock, downloads to temp for file comparison
   if (checkOnly) {
     return handleCheckOnly(target, { jsonOutput, branch, beta });
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch, beta, mode });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, branch, beta, mode });
   if (!ok) process.exit(1);
-}
-
-/**
- * Validate that a provided --temp-dir exists and contains a valid package.
- * Prints/logs the error if invalid. Returns { valid: boolean }.
- */
-function validateTempDir(tempDir, { jsonOutput, action, component }) {
-  const checks = [
-    { test: () => fs.existsSync(tempDir), msg: `Provided temp dir does not exist: ${tempDir}` },
-    { test: () => fs.existsSync(path.join(tempDir, 'package.json')), msg: `Provided temp dir is missing package.json (empty or invalid): ${tempDir}` },
-  ];
-  for (const { test, msg } of checks) {
-    if (!test()) {
-      if (jsonOutput) {
-        const errOutput = { action, success: false, error: msg };
-        if (component) errOutput.component = component;
-        errOutput.reply = formatC4Reply('error', { message: msg });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${msg}`);
-      }
-      return { valid: false };
-    }
-  }
-  return { valid: true };
 }
 
 /**
@@ -413,7 +393,12 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
   if (shouldDownload) {
     const repo = result.repo || (branch ? getRepo(component) : null);
     if (repo) {
-      const dlResult = downloadToTemp(repo, result.latest, branch);
+      let dlResult;
+      try {
+        dlResult = downloadToTemp(repo, result.latest, branch);
+      } catch (err) {
+        dlResult = { success: false, error: err.message };
+      }
       if (dlResult.success) {
         tempDir = dlResult.tempDir;
 
@@ -474,7 +459,6 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
     if (changelog) output.changelog = changelog;
     if (localChanges) output.localChanges = localChanges;
     if (evalResult) output.evaluation = evalResult;
-    if (tempDir) output.tempDir = tempDir;
     output.reply = formatC4Reply('check', { component, ...result, changelog, localChanges, evaluation: evalResult });
     console.log(JSON.stringify(output, null, 2));
   } else {
@@ -508,9 +492,6 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
         console.log(`\n${heading('Changelog:')}\n${changelog}`);
       }
 
-      if (tempDir) {
-        console.log(`\n${dim(`Downloaded to: ${tempDir}`)}`);
-      }
       console.log(`\n${dim(`Run "zylos upgrade ${component} --yes" to upgrade.`)}`);
     } else {
       // --branch specified but branch version matches installed version
@@ -518,8 +499,7 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
     }
   }
 
-  // NOTE: tempDir is NOT cleaned up here — it's kept for reuse by --yes --temp-dir
-  // Claude or the user is responsible for cleanup if upgrade is not performed
+  cleanupTemp(tempDir);
 }
 
 /**
@@ -529,10 +509,9 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch, beta = false, mode = 'merge' }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, branch, beta = false, mode = 'merge' }) {
   const skillDir = path.join(SKILLS_DIR, component);
-  let tempDir = providedTempDir || null;
-  const tempDirWasProvided = !!providedTempDir;
+  let tempDir = null;
 
   // 1. Acquire lock
   const lockResult = acquireLock(component);
@@ -576,43 +555,42 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
       return true;
     }
 
-    // 3. Download new version to temp (skip if reusing from --check)
-    if (tempDirWasProvided) {
-      if (!validateTempDir(tempDir, { jsonOutput, action: 'upgrade', component }).valid) return false;
-      if (!jsonOutput) {
-        console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
+    // 3. Download new version to temp (always fresh in confirm/--yes flow)
+    const repo = check.repo || (branch ? getRepo(component) : null);
+    if (!repo) {
+      if (jsonOutput) {
+        const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
+        errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error('Error: No repo configured for this component');
       }
-    } else {
-      const repo = check.repo || (branch ? getRepo(component) : null);
-      if (!repo) {
-        if (jsonOutput) {
-          const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
-          errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error('Error: No repo configured for this component');
-        }
-        return false;
-      }
-
-      const downloadLabel = branch ? `${component} (branch: ${branch})` : `${component}@${check.latest}`;
-      if (!jsonOutput) {
-        console.log(`\nDownloading ${bold(downloadLabel)}...`);
-      }
-
-      const dlResult = downloadToTemp(repo, check.latest, branch);
-      if (!dlResult.success) {
-        if (jsonOutput) {
-          const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
-          errOutput.reply = formatC4Reply('error', { message: dlResult.error });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${dlResult.error}`);
-        }
-        return false;
-      }
-      tempDir = dlResult.tempDir;
+      return false;
     }
+
+    const downloadLabel = branch ? `${component} (branch: ${branch})` : `${component}@${check.latest}`;
+    if (!jsonOutput) {
+      console.log(`\n${dim('Confirm flow uses a fresh download (check artifacts are not reused).')}`);
+      console.log(`Downloading ${bold(downloadLabel)}...`);
+    }
+
+    let dlResult;
+    try {
+      dlResult = downloadToTemp(repo, check.latest, branch);
+    } catch (err) {
+      dlResult = { success: false, error: err.message };
+    }
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
+        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
 
     // 4. Show info: version diff, changelog, local changes + Claude eval
     const changes = detectChanges(skillDir);
@@ -622,6 +600,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 
     if (!jsonOutput) {
       console.log(`\n${bold(component)}: ${dim(check.current)} → ${bold(check.latest)}`);
+      const targetVersion = check.latest || (branch ? `branch:${branch}` : 'unknown');
+      const targetRef = branch ? `branch:${branch}` : `tag:v${check.latest}`;
+      console.log(dim(`Target package: ${targetVersion} (${targetRef})`));
 
       // Show local modifications (compared to manifest)
       if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
@@ -899,7 +880,12 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
   // With --branch, always proceed even if versions match (user wants to install specific branch)
   if (check.hasUpdate || branch) {
     // Download new version to temp dir (for template/file comparison by Claude)
-    const dlResult = downloadCoreToTemp(check.latest, branch);
+    let dlResult;
+    try {
+      dlResult = downloadCoreToTemp(check.latest, branch);
+    } catch (err) {
+      dlResult = { success: false, error: err.message };
+    }
     if (dlResult.success) {
       tempDir = dlResult.tempDir;
 
@@ -933,7 +919,6 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
       : null;
     if (mappedChanges) output.localChanges = mappedChanges;
-    if (tempDir) output.tempDir = tempDir;
     output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
@@ -954,14 +939,11 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
         console.log(`\n${heading('Changelog:')}\n${changelog}`);
       }
 
-      if (tempDir) {
-        console.log(`\n${dim(`Downloaded to: ${tempDir}`)}`);
-      }
       console.log(`\n${dim('Run "zylos upgrade --self --yes" to upgrade.')}`);
     }
   }
 
-  // NOTE: tempDir is NOT cleaned up here — it's kept for reuse by --yes --temp-dir
+  cleanupCoreTemp(tempDir);
 }
 
 /**
@@ -971,11 +953,10 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = 'merge' } = {}) {
+async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
-  let tempDir = providedTempDir || null;
-  const tempDirWasProvided = !!providedTempDir;
+  let tempDir = null;
 
   // 1. Acquire lock (reuse component lock mechanism with special name)
   const lockResult = acquireLock('_zylos-core');
@@ -1016,31 +997,30 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
       return true;
     }
 
-    // 3. Download new version to temp (skip if reusing from --check)
-    if (tempDirWasProvided) {
-      if (!validateTempDir(tempDir, { jsonOutput, action: 'self_upgrade' }).valid) return false;
-      if (!jsonOutput) {
-        console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
-      }
-    } else {
-      const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
-      if (!jsonOutput) {
-        console.log(`\nDownloading ${bold(downloadLabel)}...`);
-      }
-
-      const dlResult = downloadCoreToTemp(check.latest, branch);
-      if (!dlResult.success) {
-        if (jsonOutput) {
-          const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
-          errOutput.reply = formatC4Reply('error', { message: dlResult.error });
-          console.log(JSON.stringify(errOutput, null, 2));
-        } else {
-          console.error(`Error: ${dlResult.error}`);
-        }
-        return false;
-      }
-      tempDir = dlResult.tempDir;
+    // 3. Download new version to temp (always fresh in confirm/--yes flow)
+    const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
+    if (!jsonOutput) {
+      console.log(`\n${dim('Confirm flow uses a fresh download (check artifacts are not reused).')}`);
+      console.log(`Downloading ${bold(downloadLabel)}...`);
     }
+
+    let dlResult;
+    try {
+      dlResult = downloadCoreToTemp(check.latest, branch);
+    } catch (err) {
+      dlResult = { success: false, error: err.message };
+    }
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
+        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
 
     // 4. Show info: version diff, changelog, local modifications to core skills
     const fullCoreChangelog = readCoreChangelog(tempDir);
@@ -1051,6 +1031,9 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
 
     if (!jsonOutput) {
       console.log(`\n${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
+      const targetVersion = check.latest || (branch ? `branch:${branch}` : 'unknown');
+      const targetRef = branch ? `branch:${branch}` : `tag:v${check.latest}`;
+      console.log(dim(`Target package: ${targetVersion} (${targetRef})`));
 
       if (allLocalChanges.length > 0) {
         console.log(`\n${warn('LOCAL MODIFICATIONS DETECTED:')}`);
