@@ -50,6 +50,10 @@ import {
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
+import {
+  findPromptY as sharedFindPromptY,
+  isUsageOverlayCapture as sharedIsUsageOverlayCapture
+} from './tmux-input-state.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -222,13 +226,7 @@ export function getClaudeInputBoxText(capture) {
  * Returns -1 if no prompt line is found.
  */
 export function findPromptY(capture) {
-  const lines = capture.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^\s*[›❯]/.test(lines[i])) {
-      return i;
-    }
-  }
-  return -1;
+  return sharedFindPromptY(capture);
 }
 
 /**
@@ -309,10 +307,7 @@ export function checkInputBox() {
 }
 
 export function isUsageOverlayCapture(capture) {
-  if (!capture) return false;
-  const hasUsageHeader = /Settings:\s+Status\s+Config\s+Usage/i.test(capture);
-  const hasEscHint = /Esc to cancel/i.test(capture);
-  return hasUsageHeader && hasEscHint;
+  return sharedIsUsageOverlayCapture(capture);
 }
 
 // Empty prompt threshold: cursor at column 0, 1, or 2 means the input box
