@@ -15,6 +15,7 @@ import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from '
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
+import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
@@ -116,8 +117,22 @@ export function checkForCoreUpdates({ branch, beta = false } = {}) {
  * @param {string} version
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
+function getWritableTmpBase(prefix = 'zylos-self-upgrade-probe-') {
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, prefix));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    // System tmp unavailable — fallback to ~/tmp
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  return base;
+}
+
 export function downloadCoreToTemp(version, branch) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-self-upgrade-'));
+  const base = getWritableTmpBase('zylos-self-upgrade-probe-');
+  const tempDir = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-'));
 
   if (branch) {
     const branchResult = downloadBranch(REPO, branch, tempDir);
@@ -569,7 +584,8 @@ function createContext({ tempDir, newVersion, mode } = {}) {
 export function step1_backupCoreSkills(ctx, deps = {}) {
   const startTime = Date.now();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupDir = deps.backupDir ?? path.join(os.tmpdir(), `zylos-core-backup-${timestamp}`);
+  const backupDir = deps.backupDir
+    ?? path.join(getWritableTmpBase('zylos-core-backup-probe-'), `zylos-core-backup-${timestamp}`);
   const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
   const skillsDir = deps.skillsDir ?? SKILLS_DIR;
   const copyTreeFn = deps.copyTree ?? copyTree;
@@ -1423,9 +1439,19 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
 // ---------------------------------------------------------------------------
 
 export function cleanupTemp(tempDir) {
-  if (tempDir && fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  if (!tempDir || !fs.existsSync(tempDir)) return;
+
+  let resolved;
+  try { resolved = fs.realpathSync(tempDir); } catch { resolved = path.resolve(tempDir); }
+
+  // Safety: only delete directories under allowed temp roots
+  const allowedRoots = getAllowedTmpRoots();
+  if (!allowedRoots.some(root => resolved.startsWith(root + '/'))) {
+    console.error(`SAFETY: refusing to delete ${resolved} (not under any allowed temp root)`);
+    return;
   }
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 // Also clean up backup dirs after successful upgrade

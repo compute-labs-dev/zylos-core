@@ -119,7 +119,7 @@
  *
  * v11 changes (Hook-based activity tracking):
  *   - Replaced non-functional fetch-preload with Claude Code hooks
- *   - hook-activity.js writes api-activity.json on tool/stop/idle events
+ *   - Hook signals now feed monitor-owned activity state instead of preload polling
  *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
  *   - Removed verify phase: single heartbeat failure → recovery
  *   - Safety-net heartbeat interval relaxed to 2 hours
@@ -139,10 +139,28 @@ import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
+import { getToolRules } from './tool-rules.js';
+import {
+  applyOrderedToolEvents,
+  createToolLifecycleState,
+  getSessionSnapshot,
+  normalizeToolLifecycleState,
+  pruneToolLifecycleState,
+} from './tool-lifecycle.js';
+import {
+  createToolEventStreamState,
+  readToolEventsIncrementalFromStream,
+  rotateToolEventStream,
+} from './tool-event-stream.js';
+import {
+  WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
+  evaluateToolWatchdogTransition
+} from './tool-watchdog.js';
 import {
   readClaudeUsageFromMonitorFiles,
   readCodexUsageFromMonitorFile
 } from './usage-monitor-file-reader.js';
+import { readTmuxInputState } from '../../comm-bridge/scripts/tmux-input-state.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -192,9 +210,14 @@ const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.jso
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
 
-// API activity file — written by hook-activity.js (Claude Code hooks)
+// API activity snapshot — built by activity-monitor from Claude hook/session signals
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
+const TOOL_EVENTS_FILE = path.join(MONITOR_DIR, 'tool-events.jsonl');
+const TOOL_EVENT_STREAM_STATE_FILE = path.join(MONITOR_DIR, 'tool-event-stream-state.json');
+const SESSION_TOOL_STATE_FILE = path.join(MONITOR_DIR, 'session-tool-state.json');
+const TOOL_WATCHDOG_STATE_FILE = path.join(MONITOR_DIR, 'tool-watchdog-state.json');
+const FOREGROUND_SESSION_FILE = path.join(MONITOR_DIR, 'foreground-session.json');
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
@@ -223,6 +246,12 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
+const TOOL_EVENT_REORDER_WINDOW_MS = 2000;
+const STATUSLINE_LAUNCH_GUARD_MS = 5000;
+const STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS = 5000;
+const TOOL_SESSION_TTL_MS = 3600_000;
+const TOOL_EVENT_ROTATION_BYTES = 1024 * 1024;
+const TOOL_EVENT_ROTATION_DRAIN_MS = 2000;
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 86400; // 24 hours
@@ -301,9 +330,18 @@ let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
-let lastDeadApiPid = null;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
+let runtimeLaunchAtMs = 0;
+let toolRules = [];
+let toolLifecycleState = createToolLifecycleState();
+let toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
+let toolEventTail = '';
+let toolEventRotatedTail = '';
+let toolEventArrivalSeq = 0;
+let toolEventReorderBuffer = [];
+let watchdogState = null;
+let lastStatuslineSyntheticClearAt = 0;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
@@ -557,6 +595,7 @@ async function startAgent() {
 
   log(`Guardian: Starting ${adapter.displayName}...`);
   lastLaunchAt = Math.floor(Date.now() / 1000);
+  runtimeLaunchAtMs = Date.now();
 
   // Clear stale heartbeat pending from previous session — prevents a race where
   // the old heartbeat times out AFTER the new session starts, pushing health to
@@ -569,9 +608,18 @@ async function startAgent() {
   try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
   try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
 
-  // Reset hook activity state — prevents stale data causing false busy detection
+  // Reset tool lifecycle state — the new session gets a fresh event stream,
+  // watchdog state, and foreground-session identity. Late old-session events
+  // are still filtered by pid/session checks inside the watchdog path.
   try {
-    fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({ version: 2, active: false, active_tools: 0, updated_at: Date.now() }));
+    resetToolLifecycleRuntimeState({ clearFiles: true });
+    fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
+      version: 3,
+      active: false,
+      active_tools: 0,
+      in_prompt: false,
+      updated_at: runtimeLaunchAtMs
+    }));
     fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
@@ -679,34 +727,577 @@ function runC4Control(args) {
   }
 }
 
-function readApiActivity() {
+function readJsonFileSafe(filePath) {
   try {
-    if (!fs.existsSync(API_ACTIVITY_FILE)) return null;
-    const activity = JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
-    const pid = Number(activity?.pid);
-
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0);
-      } catch (err) {
-        if (err?.code !== 'EPERM') {
-          if (lastDeadApiPid !== pid) {
-            log(`Hook activity ignored: stale pid ${pid} not running (${API_ACTIVITY_FILE})`);
-          }
-          lastDeadApiPid = pid;
-          return null;
-        }
-      }
-
-      if (lastDeadApiPid === pid) {
-        lastDeadApiPid = null;
-      }
-    }
-
-    return activity;
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch {
     return null;
   }
+}
+
+function safeUnlink(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Best-effort.
+  }
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
+function getTmuxPanePid(sessionName) {
+  try {
+    const out = execSync(
+      `tmux list-panes -t "${sessionName}" -F '#{pane_pid}' 2>/dev/null | head -1`,
+      { encoding: 'utf8', timeout: 3000 }
+    ).trim();
+    const pid = Number.parseInt(out, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getTmuxClaudePid(sessionName) {
+  const panePid = getTmuxPanePid(sessionName);
+  if (!panePid) return 0;
+
+  try {
+    const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, {
+      encoding: 'utf8',
+      timeout: 3000
+    }).trim();
+    if (name === 'claude') return panePid;
+  } catch {
+    // Ignore and fall through.
+  }
+
+  try {
+    const out = execSync(`pgrep -P ${panePid} -f "claude" | head -1`, {
+      encoding: 'utf8',
+      timeout: 3000
+    }).trim();
+    const childPid = Number.parseInt(out, 10);
+    return Number.isInteger(childPid) && childPid > 0 ? childPid : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeToolEventStreamState() {
+  try {
+    atomicWriteJson(TOOL_EVENT_STREAM_STATE_FILE, toolEventStreamState);
+  } catch {
+    // Best-effort.
+  }
+}
+
+function writeSessionToolState(foregroundIdentity, foregroundSessionId) {
+  try {
+    const sessions = {};
+    for (const sessionId of Object.keys(toolLifecycleState.sessions).sort()) {
+      const snapshot = getSessionSnapshot(toolLifecycleState, sessionId, foregroundSessionId);
+      if (!snapshot) continue;
+      sessions[sessionId] = {
+        ...snapshot,
+        watchdog_candidate: snapshot.running_tools.find((tool) => {
+          const rule = tool.rule_id ? toolRules.find((candidate) => candidate.id === tool.rule_id) : null;
+          return Boolean(rule?.watchdog?.enabled);
+        }) || null
+      };
+    }
+
+    atomicWriteJson(SESSION_TOOL_STATE_FILE, {
+      version: 1,
+      foreground_source: foregroundIdentity?.source || null,
+      foreground_session_id: foregroundSessionId || null,
+      sessions,
+      pending_completions: toolLifecycleState.pending_completions,
+      pending_clear_hints: toolLifecycleState.pending_clear_hints,
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
+function writeApiActivitySnapshot(apiActivity) {
+  try {
+    atomicWriteJson(API_ACTIVITY_FILE, apiActivity);
+  } catch {
+    // Best-effort.
+  }
+}
+
+function writeWatchdogState() {
+  try {
+    if (!watchdogState) {
+      safeUnlink(TOOL_WATCHDOG_STATE_FILE);
+      return;
+    }
+    atomicWriteJson(TOOL_WATCHDOG_STATE_FILE, watchdogState);
+  } catch {
+    // Best-effort.
+  }
+}
+
+function loadPersistedToolEventStreamState() {
+  const persisted = readJsonFileSafe(TOOL_EVENT_STREAM_STATE_FILE);
+  if (!persisted || persisted.version !== 1) return null;
+  try {
+    if (!fs.existsSync(TOOL_EVENTS_FILE)) return null;
+    const stat = fs.statSync(TOOL_EVENTS_FILE);
+    const inode = Number(stat.ino) || 0;
+    if (persisted.inode && persisted.inode !== inode) return null;
+    if (stat.size < (Number(persisted.offset) || 0)) return null;
+
+    const loaded = {
+      ...createToolEventStreamState(TOOL_EVENTS_FILE),
+      inode,
+      offset: Number(persisted.offset) || 0,
+      last_processed_at: Number(persisted.last_processed_at) || 0,
+      last_rotation_at: Number(persisted.last_rotation_at) || 0,
+    };
+
+    const rotatedDrain = persisted.rotated_drain;
+    if (rotatedDrain?.path) {
+      if (fs.existsSync(rotatedDrain.path)) {
+        const rotatedStat = fs.statSync(rotatedDrain.path);
+        const rotatedInode = Number(rotatedStat.ino) || 0;
+        const rotatedOffset = Number(rotatedDrain.offset) || 0;
+        if ((!rotatedDrain.inode || rotatedDrain.inode === rotatedInode) && rotatedStat.size >= rotatedOffset) {
+          loaded.rotated_drain = {
+            path: rotatedDrain.path,
+            inode: rotatedInode,
+            offset: rotatedOffset,
+            last_size: Math.max(Number(rotatedDrain.last_size) || 0, rotatedOffset),
+            quiet_since: Number(rotatedDrain.quiet_since) || loaded.last_rotation_at || 0,
+          };
+        }
+      }
+    }
+
+    if (!loaded.offset && !loaded.rotated_drain) return null;
+    return loaded;
+  } catch {
+    return null;
+  }
+}
+
+function resetToolLifecycleRuntimeState({ clearFiles = false } = {}) {
+  toolLifecycleState = createToolLifecycleState();
+  toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
+  toolEventTail = '';
+  toolEventRotatedTail = '';
+  toolEventArrivalSeq = 0;
+  toolEventReorderBuffer = [];
+  lastStatuslineSyntheticClearAt = 0;
+  watchdogState = null;
+
+  if (clearFiles) {
+    try {
+      fs.writeFileSync(TOOL_EVENTS_FILE, '');
+    } catch {
+      // Best-effort.
+    }
+    safeUnlink(TOOL_EVENT_STREAM_STATE_FILE);
+    safeUnlink(SESSION_TOOL_STATE_FILE);
+    safeUnlink(TOOL_WATCHDOG_STATE_FILE);
+    safeUnlink(FOREGROUND_SESSION_FILE);
+    safeUnlink(`${TOOL_EVENTS_FILE}.old`);
+    return;
+  }
+
+  // PM2 restart path: resume from persisted state to avoid full replay.
+  // Both stream cursor and lifecycle state must load successfully;
+  // if either is stale or missing, fall back to offset-0 full replay.
+  const loadedStreamState = loadPersistedToolEventStreamState();
+  if (!loadedStreamState) return;
+
+  const loadedSessionState = readJsonFileSafe(SESSION_TOOL_STATE_FILE);
+  if (!loadedSessionState || loadedSessionState.version !== 1) return;
+
+  toolEventStreamState = loadedStreamState;
+  toolLifecycleState = normalizeToolLifecycleState(loadedSessionState);
+}
+
+function readForegroundSessionRecord() {
+  const data = readJsonFileSafe(FOREGROUND_SESSION_FILE);
+  if (!data || !data.session_id) return null;
+  return {
+    sessionId: String(data.session_id),
+    claudePid: Number(data.claude_pid) || 0,
+    source: data.source || 'session_start',
+    observedAt: Number(data.observed_at) || 0,
+  };
+}
+
+function readStatuslineRecord() {
+  try {
+    if (!fs.existsSync(STATUSLINE_FILE)) return null;
+    const stat = fs.statSync(STATUSLINE_FILE);
+    const data = JSON.parse(fs.readFileSync(STATUSLINE_FILE, 'utf8'));
+    if (!data?.session_id) return null;
+    return {
+      sessionId: String(data.session_id),
+      observedAt: Math.floor(stat.mtimeMs),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function canTreatPaneAsRecovered(interactiveState) {
+  return Boolean(
+    interactiveState?.captureOk &&
+    interactiveState.promptVisible &&
+    !interactiveState.usageOverlay &&
+    !interactiveState.inProgressCapture &&
+    (interactiveState.inputState === 'empty' || interactiveState.inputState === 'has_content')
+  );
+}
+
+function resolveTrustedForegroundIdentity(currentTmuxClaudePid) {
+  const early = readForegroundSessionRecord();
+  const statusline = readStatuslineRecord();
+  const launchGuardFloor = Math.max(0, runtimeLaunchAtMs - STATUSLINE_LAUNCH_GUARD_MS);
+
+  const earlyTrusted = Boolean(
+    early &&
+    early.observedAt >= launchGuardFloor &&
+    isPidAlive(early.claudePid) &&
+    (!currentTmuxClaudePid || early.claudePid === currentTmuxClaudePid)
+  );
+
+  const statuslineFresh = Boolean(
+    statusline &&
+    statusline.observedAt >= launchGuardFloor
+  );
+
+  if (statuslineFresh && currentTmuxClaudePid > 0) {
+    return {
+      trusted: true,
+      sessionId: statusline.sessionId,
+      claudePid: currentTmuxClaudePid,
+      source: earlyTrusted && early.sessionId === statusline.sessionId
+        ? 'session_start+statusline'
+        : 'statusline',
+      observedAt: statusline.observedAt,
+      blockReason: null,
+    };
+  }
+
+  if (earlyTrusted) {
+    return {
+      trusted: true,
+      sessionId: early.sessionId,
+      claudePid: early.claudePid,
+      source: early.source || 'session_start',
+      observedAt: early.observedAt,
+      blockReason: null,
+    };
+  }
+
+  if (statusline && !statuslineFresh) {
+    return {
+      trusted: false,
+      sessionId: statusline.sessionId,
+      claudePid: 0,
+      source: 'statusline',
+      observedAt: statusline.observedAt,
+      blockReason: 'stale_statusline',
+    };
+  }
+
+  if (statusline && currentTmuxClaudePid <= 0) {
+    return {
+      trusted: false,
+      sessionId: statusline.sessionId,
+      claudePid: 0,
+      source: 'statusline',
+      observedAt: statusline.observedAt,
+      blockReason: 'missing_tmux_claude_pid',
+    };
+  }
+
+  return {
+    trusted: false,
+    sessionId: null,
+    claudePid: 0,
+    source: null,
+    observedAt: 0,
+    blockReason: 'missing_foreground_identity',
+  };
+}
+
+function getToolEventPriority(eventName) {
+  switch (eventName) {
+    case 'prompt':
+      return 10;
+    case 'pre_tool':
+      return 20;
+    case 'post_tool':
+    case 'post_tool_failure':
+      return 30;
+    case 'stop':
+    case 'stop_failure':
+    case 'idle':
+      return 40;
+    case 'session_clear_hint':
+      return 50;
+    default:
+      return 100;
+  }
+}
+
+function sortToolEvents(events) {
+  events.sort((left, right) => {
+    if (left.ts !== right.ts) return left.ts - right.ts;
+    const priorityDiff = getToolEventPriority(left.event) - getToolEventPriority(right.event);
+    if (priorityDiff !== 0) return priorityDiff;
+    return (left._arrival_seq || 0) - (right._arrival_seq || 0);
+  });
+}
+
+function readToolEventsIncremental(nowMs) {
+  const result = readToolEventsIncrementalFromStream({
+    filePath: TOOL_EVENTS_FILE,
+    streamState: toolEventStreamState,
+    activeTail: toolEventTail,
+    rotatedTail: toolEventRotatedTail,
+    arrivalSeq: toolEventArrivalSeq,
+    nowMs,
+    drainQuietMs: TOOL_EVENT_ROTATION_DRAIN_MS,
+    log,
+  });
+  toolEventStreamState = result.streamState;
+  toolEventTail = result.activeTail;
+  toolEventRotatedTail = result.rotatedTail;
+  toolEventArrivalSeq = result.arrivalSeq;
+  return result.events;
+}
+
+function maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState) {
+  const statusline = readStatuslineRecord();
+  if (!statusline?.sessionId) return null;
+  if (statusline.observedAt < Math.max(0, runtimeLaunchAtMs - STATUSLINE_LAUNCH_GUARD_MS)) return null;
+  if (statusline.observedAt <= lastStatuslineSyntheticClearAt) return null;
+  if (!canTreatPaneAsRecovered(interactiveState)) return null;
+  const session = getSessionSnapshot(toolLifecycleState, statusline.sessionId, statusline.sessionId);
+  const runningTools = session?.running_tools || [];
+  if (runningTools.length === 0) return null;
+  const newestStartedAt = Number(runningTools[runningTools.length - 1]?.started_at) || 0;
+  if (newestStartedAt > 0 && statusline.observedAt < (newestStartedAt + STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS)) {
+    return null;
+  }
+  lastStatuslineSyntheticClearAt = statusline.observedAt;
+  return {
+    ts: statusline.observedAt,
+    pid: currentTmuxClaudePid || 0,
+    session_id: statusline.sessionId,
+    event: 'session_clear_hint',
+    reason: 'statusline_turn_complete',
+    match_slack_ms: TOOL_EVENT_REORDER_WINDOW_MS,
+    _arrival_seq: ++toolEventArrivalSeq,
+  };
+}
+
+function collectLiveSessionPids() {
+  const livePids = new Set();
+  for (const session of Object.values(toolLifecycleState.sessions)) {
+    const pid = Number(session?.pid) || 0;
+    if (isPidAlive(pid)) livePids.add(pid);
+  }
+  return livePids;
+}
+
+function maybeRotateToolEventStream(nowMs, foregroundSessionId) {
+  try {
+    if (!fs.existsSync(TOOL_EVENTS_FILE)) return;
+    const stat = fs.statSync(TOOL_EVENTS_FILE);
+    if (stat.size < TOOL_EVENT_ROTATION_BYTES) return;
+
+    const hasAnyActiveTools = Object.keys(toolLifecycleState.sessions).some((sessionId) => {
+      const snapshot = getSessionSnapshot(toolLifecycleState, sessionId, foregroundSessionId);
+      return Boolean(snapshot?.running_tools?.length);
+    });
+    const hasPendingBuffers = toolLifecycleState.pending_completions.length > 0 || toolLifecycleState.pending_clear_hints.length > 0;
+    if (
+      hasAnyActiveTools ||
+      hasPendingBuffers ||
+      toolEventReorderBuffer.length > 0 ||
+      toolEventTail ||
+      toolEventRotatedTail ||
+      toolEventStreamState.rotated_drain
+    ) {
+      return;
+    }
+
+    toolEventStreamState = rotateToolEventStream({
+      filePath: TOOL_EVENTS_FILE,
+      nowMs,
+    });
+    toolEventTail = '';
+    toolEventRotatedTail = '';
+    writeToolEventStreamState();
+    log('Tool event stream: rotated event log');
+  } catch (err) {
+    log(`Tool event stream rotation failed: ${err.message}`);
+  }
+}
+
+function processToolLifecycle(nowMs, currentTmuxClaudePid, interactiveState) {
+  const newEvents = readToolEventsIncremental(nowMs);
+  const syntheticClear = maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState);
+  if (syntheticClear) newEvents.push(syntheticClear);
+  if (newEvents.length > 0) {
+    toolEventReorderBuffer.push(...newEvents);
+    sortToolEvents(toolEventReorderBuffer);
+  }
+
+  const flushBefore = nowMs - TOOL_EVENT_REORDER_WINDOW_MS;
+  const flushable = [];
+  const deferred = [];
+  for (const event of toolEventReorderBuffer) {
+    if ((event.ts || 0) <= flushBefore) {
+      flushable.push(event);
+    } else {
+      deferred.push(event);
+    }
+  }
+  toolEventReorderBuffer = deferred;
+
+  if (flushable.length > 0) {
+    applyOrderedToolEvents(toolLifecycleState, flushable, { nowMs });
+  }
+
+  pruneToolLifecycleState(toolLifecycleState, {
+    nowMs,
+    livePids: collectLiveSessionPids(),
+    sessionTtlMs: TOOL_SESSION_TTL_MS
+  });
+
+  writeToolEventStreamState();
+}
+
+function getRuleById(ruleId) {
+  if (!ruleId) return null;
+  return toolRules.find((rule) => rule.id === ruleId) || null;
+}
+
+function buildApiActivity(foregroundIdentity, currentTmuxClaudePid) {
+  const sessionId = foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null;
+  const session = sessionId ? getSessionSnapshot(toolLifecycleState, sessionId, sessionId) : null;
+  const runningTools = session?.running_tools || [];
+  const oldestActiveTool = runningTools[0] || null;
+  const watchdogCandidate = runningTools.find((tool) => {
+    const rule = getRuleById(tool.rule_id);
+    return Boolean(rule?.watchdog?.enabled);
+  }) || null;
+  const pid = foregroundIdentity?.claudePid || session?.pid || currentTmuxClaudePid || 0;
+
+  return {
+    version: 3,
+    pid,
+    sessionId: sessionId || null,
+    scope: sessionId ? 'foreground' : null,
+    foreground_identity: {
+      session_id: foregroundIdentity?.sessionId || null,
+      source: foregroundIdentity?.source || null,
+      trusted: Boolean(foregroundIdentity?.trusted),
+      observed_at: foregroundIdentity?.observedAt || 0,
+    },
+    event: session?.last_event || null,
+    tool: watchdogCandidate?.name || oldestActiveTool?.name || session?.last_completed_tool?.name || null,
+    active: Boolean(runningTools.length > 0 || session?.in_prompt),
+    active_tools: runningTools.length,
+    in_prompt: Boolean(session?.in_prompt),
+    updated_at: session?.last_event_at || 0,
+    oldest_active_tool: oldestActiveTool ? {
+      event_id: oldestActiveTool.event_id,
+      name: oldestActiveTool.name,
+      rule_id: oldestActiveTool.rule_id,
+      started_at: oldestActiveTool.started_at,
+      summary: oldestActiveTool.summary,
+    } : null,
+    watchdog_candidate_tool: watchdogCandidate ? {
+      event_id: watchdogCandidate.event_id,
+      name: watchdogCandidate.name,
+      rule_id: watchdogCandidate.rule_id,
+      started_at: watchdogCandidate.started_at,
+      summary: watchdogCandidate.summary,
+    } : null,
+    last_completed_tool: session?.last_completed_tool || null,
+  };
+}
+
+function clearWatchdogState() {
+  if (!watchdogState) return;
+  watchdogState = null;
+  writeWatchdogState();
+}
+
+function applySyntheticClearHint(sessionId, pid, reason, nowMs) {
+  applyOrderedToolEvents(toolLifecycleState, [{
+    ts: nowMs,
+    pid: pid || 0,
+    session_id: sessionId,
+    event: 'session_clear_hint',
+    reason,
+    match_slack_ms: TOOL_EVENT_REORDER_WINDOW_MS,
+  }], { nowMs });
+}
+
+function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
+  const state = {
+    watchdogState,
+    runtimeLaunchAtMs,
+    launchGracePeriodSec: LAUNCH_GRACE_PERIOD,
+    engineHealth: engine.health,
+  };
+
+  const phase = evaluateToolWatchdogTransition({
+    nowMs,
+    foregroundIdentity,
+    apiActivity,
+    interactiveState,
+    state,
+    deps: {
+      canTreatPaneAsRecovered,
+      getRuleById,
+      clearWatchdogState: () => {
+        watchdogState = null;
+        state.watchdogState = null;
+        writeWatchdogState();
+      },
+      writeWatchdogState: () => {
+        watchdogState = state.watchdogState;
+        writeWatchdogState();
+      },
+      applySyntheticClearHint,
+      enqueueInterrupt: (interruptKey) => runC4Control([
+        'enqueue',
+        '--content', `[KEYSTROKE]${interruptKey}`,
+        '--priority', '0',
+        '--bypass-state',
+        '--available-in', String(WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC),
+        '--no-ack-suffix'
+      ]),
+      triggerRecovery: (reason) => engine.triggerRecovery(reason),
+      log,
+    }
+  });
+
+  watchdogState = state.watchdogState;
+  return phase;
 }
 
 function sendRecoveryNotice(channel, endpoint) {
@@ -1289,8 +1880,34 @@ async function monitorLoop() {
       last_check_human: currentTimeHuman,
       idle_seconds: 0,
       not_running_seconds: notRunningCount,
-      message: `${adapter.displayName} not running in tmux`
+      message: `${adapter.displayName} not running in tmux`,
+      runtime_launch_at: runtimeLaunchAtMs
     });
+
+    if (adapter.runtimeId === 'claude') {
+      clearWatchdogState();
+      writeApiActivitySnapshot({
+        version: 3,
+        pid: 0,
+        sessionId: null,
+        scope: null,
+        foreground_identity: {
+          session_id: null,
+          source: null,
+          trusted: false,
+          observed_at: 0,
+        },
+        event: 'stop',
+        tool: null,
+        active: false,
+        active_tools: 0,
+        in_prompt: false,
+        updated_at: Date.now(),
+        oldest_active_tool: null,
+        watchdog_candidate_tool: null,
+        last_completed_tool: null,
+      });
+    }
 
     if (state !== lastState) {
       log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
@@ -1347,8 +1964,36 @@ async function monitorLoop() {
     source = 'default';
   }
 
-  // Read API activity from hook-activity.js (may be null if no hooks fired yet)
-  const apiActivity = readApiActivity();
+  const currentTmuxClaudePid = adapter.runtimeId === 'claude'
+    ? getTmuxClaudePid(adapter.sessionName)
+    : 0;
+  const interactiveState = adapter.runtimeId === 'claude'
+    ? readTmuxInputState({ sessionName: adapter.sessionName })
+    : null;
+
+  let apiActivity = null;
+  let foregroundIdentity = null;
+  let watchdogStatus = { watchdog_phase: 'idle', watchdog_block_reason: null };
+
+  if (adapter.runtimeId === 'claude') {
+    const toolNowMs = Date.now();
+    processToolLifecycle(toolNowMs, currentTmuxClaudePid, interactiveState);
+    foregroundIdentity = resolveTrustedForegroundIdentity(currentTmuxClaudePid);
+    apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+    watchdogStatus = evaluateToolWatchdog({
+      nowMs: toolNowMs,
+      foregroundIdentity,
+      apiActivity,
+      interactiveState
+    });
+    if (watchdogStatus.api_activity_dirty) {
+      apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+    }
+    writeSessionToolState(foregroundIdentity, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
+    writeApiActivitySnapshot(apiActivity);
+    maybeRotateToolEventStream(toolNowMs, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
+  }
+
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
   const activeTools = apiActivity?.active_tools ?? 0;
   const thinking = apiActivity?.active === true || activeTools > 0;
@@ -1406,7 +2051,23 @@ async function monitorLoop() {
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
     inactive_seconds: inactiveSeconds,
-    source
+    source,
+    runtime_launch_at: runtimeLaunchAtMs,
+    active_tool_name: apiActivity?.watchdog_candidate_tool?.name || apiActivity?.oldest_active_tool?.name || null,
+    active_tool_running_seconds: apiActivity?.watchdog_candidate_tool?.started_at
+      ? Math.max(0, Math.floor((Date.now() - apiActivity.watchdog_candidate_tool.started_at) / 1000))
+      : (apiActivity?.oldest_active_tool?.started_at
+          ? Math.max(0, Math.floor((Date.now() - apiActivity.oldest_active_tool.started_at) / 1000))
+          : 0),
+    active_tool_summary: apiActivity?.watchdog_candidate_tool?.summary || apiActivity?.oldest_active_tool?.summary || null,
+    active_tool_rule_id: apiActivity?.watchdog_candidate_tool?.rule_id || null,
+    active_tool_session_id: apiActivity?.sessionId || null,
+    watchdog_episode_key: watchdogState?.episode_key || null,
+    watchdog_phase: watchdogStatus.watchdog_phase,
+    watchdog_last_action_at: watchdogState?.last_action_at || null,
+    watchdog_block_reason: watchdogStatus.watchdog_block_reason,
+    foreground_session_source: foregroundIdentity?.source || null,
+    foreground_session_observed_at: foregroundIdentity?.observedAt || 0,
   });
 
   if (state !== lastState) {
@@ -1494,6 +2155,9 @@ function init() {
   adapter = getActiveAdapter();
   const config = readConfigObject();
   const heartbeatEnabled = isRuntimeHeartbeatEnabled({ runtimeId: adapter.runtimeId, config });
+  toolRules = getToolRules({ runtimeId: adapter.runtimeId, config });
+  resetToolLifecycleRuntimeState();
+  watchdogState = readJsonFileSafe(TOOL_WATCHDOG_STATE_FILE);
 
   // Initialize ProcSampler for frozen-process detection via context-switch sampling.
   // sessionName comes from the adapter (claude-main or codex-main).
@@ -1501,6 +2165,7 @@ function init() {
 
   const initialStatus = loadInitialHealth();
   const initialHealth = initialStatus.health;
+  runtimeLaunchAtMs = Number(initialStatus.runtime_launch_at) || Date.now();
 
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
