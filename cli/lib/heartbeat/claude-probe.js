@@ -44,6 +44,19 @@ const API_ERROR_PATTERNS = [
   /overloaded_error/,                                      // Anthropic overloaded
 ];
 
+// Post-rate-limit "stuck modal" patterns: when Claude Code hits a usage limit
+// and the recovery flow lands on /rate-limit-options → Change account → OAuth
+// login, a failed OAuth code leaves the session trapped on a retry modal.
+// Detection here lets the Guardian kill+restart the session regardless of
+// heartbeat state. Patterns are specific to modal UI to minimize false positives
+// from conversation content; the 2-consecutive-detection gate in the activity
+// monitor further suppresses noise.
+const STUCK_MODAL_PATTERNS = [
+  /OAuth error:/,            // "OAuth error: Invalid code..." from failed auth
+  /\/rate-limit-options/,    // sitting at the rate-limit-options menu
+  /Press Enter to retry/,    // generic retry-input modal (OAuth / login)
+];
+
 /**
  * Create a Claude Code heartbeat probe.
  *
@@ -157,6 +170,28 @@ export function createClaudeProbe({
       if (!pane) return { detected: false };
 
       for (const p of API_ERROR_PATTERNS) {
+        const match = pane.match(p);
+        if (match) {
+          return { detected: true, pattern: match[0] };
+        }
+      }
+      return { detected: false };
+    },
+
+    /**
+     * Detect post-rate-limit "stuck modal" states where Claude Code is trapped
+     * on an interactive prompt (e.g. OAuth login retry after a failed account
+     * switch via /rate-limit-options). These modals do not auto-dismiss and the
+     * heartbeat engine's rate_limited cooldown does not detect them. On
+     * confirmed detection, the Guardian kills the tmux session and relaunches.
+     *
+     * @returns {{ detected: boolean, pattern?: string }}
+     */
+    detectStuckModal() {
+      const pane = _captureTmuxPane(tmuxSession);
+      if (!pane) return { detected: false };
+
+      for (const p of STUCK_MODAL_PATTERNS) {
         const match = pane.match(p);
         if (match) {
           return { detected: true, pattern: match[0] };

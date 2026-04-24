@@ -246,6 +246,7 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
+const STUCK_MODAL_SCAN_INTERVAL = 15;  // seconds between stuck-modal (OAuth/retry) scans
 const TOOL_EVENT_REORDER_WINDOW_MS = 2000;
 const STATUSLINE_LAUNCH_GUARD_MS = 5000;
 const STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS = 5000;
@@ -330,6 +331,8 @@ let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
+let lastStuckModalScanAt = 0;
+let stuckModalConsecutiveHits = 0;  // consecutive scans that detected a stuck modal
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
 let runtimeLaunchAtMs = 0;
@@ -2122,6 +2125,33 @@ async function monitorLoop() {
         }
       } else {
         apiErrorConsecutiveHits = 0;
+      }
+    }
+  }
+
+  // Proactive stuck-modal scan: detect post-rate-limit OAuth/login traps where
+  // the Claude Code REPL is frozen on a modal waiting for user input. Unlike
+  // the API error scan above, this runs regardless of engine.health because a
+  // modal can trap the session during rate_limited / recovering states too —
+  // exactly the window where heartbeat-based detection is suppressed. Requires
+  // 2 consecutive detections (30s apart) for false-positive protection.
+  // Skipped during launch grace period (session still initializing).
+  if (engine.deps.detectStuckModal) {
+    const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
+    if (!withinGrace && (currentTime - lastStuckModalScanAt) >= STUCK_MODAL_SCAN_INTERVAL) {
+      lastStuckModalScanAt = currentTime;
+      const modal = engine.deps.detectStuckModal();
+      if (modal.detected) {
+        stuckModalConsecutiveHits++;
+        if (stuckModalConsecutiveHits >= 2) {
+          log(`Stuck modal scan: "${modal.pattern}" detected ${stuckModalConsecutiveHits} consecutive times. Killing session for restart.`);
+          adapter.stop();
+          stuckModalConsecutiveHits = 0;
+        } else {
+          log(`Stuck modal scan: "${modal.pattern}" detected (${stuckModalConsecutiveHits}/2, confirming on next scan)`);
+        }
+      } else {
+        stuckModalConsecutiveHits = 0;
       }
     }
   }
