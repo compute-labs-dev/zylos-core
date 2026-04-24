@@ -321,7 +321,7 @@ export function renderCodexProjectConfig() {
     '',
     '# Acknowledge the latest model NUX so the "Introducing GPT-X" dialog',
     '# is not shown on startup.  Update this when Codex ships a new default model.',
-    'model_availability_nux = "gpt-5.4"',
+    'model_availability_nux = "gpt-5.5"',
     '',
     '# Enable Codex features required by Zylos runtime workflows.',
     '[features]',
@@ -341,12 +341,78 @@ export function renderCodexProjectConfig() {
   ].join('\n') + '\n';
 }
 
+function escapeTomlBasicString(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function unescapeTomlBasicString(value) {
+  return value.replace(/\\(["\\])/g, '$1');
+}
+
+function parseProjectHeader(line) {
+  const match = line.match(/^\s*\[projects\.(["'])(.*)\1\]\s*(?:#.*)?$/);
+  if (!match) return null;
+  const [, quote, rawPath] = match;
+  return quote === '"' ? unescapeTomlBasicString(rawPath) : rawPath;
+}
+
+function removeProjectTrustBlock(content, projectDir) {
+  const lines = content.split('\n');
+  const kept = [];
+  let skipping = false;
+
+  for (const line of lines) {
+    const isTableHeader = /^\s*\[/.test(line);
+
+    if (skipping && !isTableHeader) {
+      continue;
+    }
+    if (skipping && isTableHeader) {
+      skipping = false;
+    }
+
+    if (parseProjectHeader(line) === projectDir) {
+      skipping = true;
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join('\n').trimEnd();
+}
+
+function upsertTopLevelOpenAiBaseUrl(content, baseUrl) {
+  if (!baseUrl) return content;
+
+  const escapedBaseUrl = escapeTomlBasicString(baseUrl);
+  const replacement = `openai_base_url = "${escapedBaseUrl}"`;
+  const lines = content ? content.split('\n') : [];
+  const firstTableIndex = lines.findIndex((line) => /^\s*\[/.test(line));
+  const topLevelEnd = firstTableIndex === -1 ? lines.length : firstTableIndex;
+
+  for (let i = 0; i < topLevelEnd; i++) {
+    if (/^\s*openai_base_url\s*=/.test(lines[i])) {
+      lines[i] = replacement;
+      return lines.join('\n').trimEnd();
+    }
+  }
+
+  if (firstTableIndex === -1) {
+    lines.push(replacement);
+  } else {
+    lines.splice(firstTableIndex, 0, replacement, '');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
 /**
  * Render global ~/.codex/config.toml with user/environment-level settings.
  *
- * Contains only trust declarations and optional base URL override.
- * Existing [projects.*] trust entries are preserved; the zylos project trust
- * entry is always regenerated.
+ * Preserves existing user-level Codex settings and only manages:
+ *   - the trust declaration for the zylos project directory
+ *   - optional top-level openai_base_url override
  *
  * @param {string} projectDir - The zylos working directory to pre-trust
  * @param {string} existingContent - Existing global config.toml contents (optional)
@@ -356,27 +422,25 @@ export function renderCodexProjectConfig() {
 export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
   const absProject = path.resolve(projectDir);
   const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
+  const trustBlock = [
+    '# Trust the zylos project directory',
+    `[projects."${escapeTomlBasicString(absProject)}"]`,
+    'trust_level = "trusted"',
+  ].join('\n');
 
-  let preservedProjects = '';
-  const projectMatches = existingContent.match(/^\[projects\.[^\]]+\][^\[]+/gm);
-  if (projectMatches) {
-    const toKeep = projectMatches.filter(
-      (s) => !s.includes(`"${absProject}"`) && !s.includes(`'${absProject}'`)
-    );
-    if (toKeep.length) preservedProjects = '\n' + toKeep.join('\n').trimEnd() + '\n';
+  let content = existingContent.replace(/\r\n/g, '\n').trimEnd();
+  content = removeProjectTrustBlock(content, absProject);
+  content = upsertTopLevelOpenAiBaseUrl(content, openaiBaseUrl);
+
+  if (!content.trim()) {
+    content = [
+      '# Codex global config — written by zylos, do not edit manually.',
+      '# Re-generated on each `zylos init` / `zylos runtime codex`.',
+    ].join('\n');
+    content = upsertTopLevelOpenAiBaseUrl(content, openaiBaseUrl);
   }
 
-  const config = [
-    '# Codex global config — written by zylos, do not edit manually.',
-    '# Re-generated on each `zylos init` / `zylos runtime codex`.',
-    ...(openaiBaseUrl ? ['', '# Use a custom OpenAI-compatible base URL', `openai_base_url = "${openaiBaseUrl.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`] : []),
-    '',
-    '# Trust the zylos project directory',
-    `[projects."${absProject}"]`,
-    'trust_level = "trusted"',
-  ].join('\n') + '\n';
-
-  return config + preservedProjects;
+  return `${content.trimEnd()}\n\n${trustBlock}\n`;
 }
 
 /**

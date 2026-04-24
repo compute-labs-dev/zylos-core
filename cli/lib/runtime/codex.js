@@ -30,6 +30,21 @@ import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
 
 const SESSION = 'codex-main';
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
+export const CODEX_TOOL_ENV_KEYS = [
+  'OMNI_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_IMAGE_MODEL',
+  'AZURE_OPENAI_API_KEY',
+  'AZURE_OPENAI_ENDPOINT',
+  'AZURE_OPENAI_DEPLOYMENT',
+  'AZURE_OPENAI_MODEL',
+  'AZURE_OPENAI_API_VERSION',
+  'JINA_API_KEY',
+  'BROWSERLESS_API_KEY',
+  'TAVILY_API_KEY',
+  'MORPH_API_KEY',
+];
 
 // When CODEX_BYPASS_PERMISSIONS=false, skip --dangerously-bypass-approvals-and-sandbox.
 // Defaults to enabled for unattended server operation.
@@ -50,6 +65,41 @@ function getCodexApiBaseUrl() {
   }
 
   return 'https://api.openai.com/v1';
+}
+
+function parseEnvValue(rawValue = '') {
+  const trimmed = rawValue.trim();
+  const quoted = trimmed.match(/^(['"])(.*)\1$/);
+  return quoted ? quoted[2] : trimmed;
+}
+
+export function readCodexToolEnv(zylosDir = ZYLOS_DIR) {
+  const env = {};
+  let content = '';
+  try {
+    content = fs.readFileSync(path.join(zylosDir, '.env'), 'utf8');
+  } catch {
+    return env;
+  }
+
+  for (const key of CODEX_TOOL_ENV_KEYS) {
+    const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm'));
+    if (match) {
+      const value = parseEnvValue(match[1]);
+      if (value) env[key] = value;
+    }
+  }
+
+  return env;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function buildEnvPrefix(env) {
+  const assignments = Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`);
+  return assignments.length ? `${assignments.join(' ')} ` : '';
 }
 
 export function isOnboardingPendingState(stateContent = '') {
@@ -289,6 +339,8 @@ export class CodexAdapter extends RuntimeAdapter {
     // 3. Build the codex command
     const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
     const codexCmd = `${CODEX_BIN}${bypassFlag}`;
+    const toolEnv = readCodexToolEnv(ZYLOS_DIR);
+    const envPrefix = buildEnvPrefix(toolEnv);
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
@@ -296,17 +348,20 @@ export class CodexAdapter extends RuntimeAdapter {
 
     if (_tmuxHasSession()) {
       const cmd = tmpPrompt
-        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${envPrefix}${codexCmd} "$_p"; ${exitLogSnippet}`
+        : `cd "${ZYLOS_DIR}"; ${envPrefix}${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
       const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${dedupedPath}`];
+      for (const [key, value] of Object.entries(toolEnv)) {
+        tmuxArgs.push('-e', `${key}=${value}`);
+      }
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
       const promptSnippet = tmpPrompt
-        ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
-        : codexCmd;
+        ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${envPrefix}${codexCmd} "$_p"`
+        : `${envPrefix}${codexCmd}`;
       const shellCmd = `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
       tmuxArgs.push('--', shellCmd);
 

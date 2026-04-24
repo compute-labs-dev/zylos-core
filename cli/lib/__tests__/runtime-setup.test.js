@@ -37,7 +37,7 @@ describe('renderCodexProjectConfig', () => {
   it('includes headless settings, features, and notice suppression', () => {
     const content = renderCodexProjectConfig();
     assert.match(content, /check_for_update_on_startup = false/);
-    assert.match(content, /model_availability_nux = "gpt-5\.4"/);
+    assert.match(content, /model_availability_nux = "gpt-5\.5"/);
     assert.match(content, /\[features\]\nmulti_agent = true/);
     assert.match(content, /\[notice\]/);
     assert.match(content, /hide_full_access_warning = true/);
@@ -59,6 +59,34 @@ describe('renderCodexGlobalConfig', () => {
     assert.match(content, /\[projects\."\/home\/user\/zylos"\]\ntrust_level = "trusted"/);
   });
 
+  it('preserves existing global Codex settings when adding trust', () => {
+    const existing = [
+      'model = "gpt-5.5"',
+      'service_tier = "fast"',
+      '',
+      '[features]',
+      'multi_agent = true',
+      'codex_hooks = true',
+      '',
+      '[plugins."gmail@openai-curated"]',
+      'enabled = true',
+      '',
+      '[mcp_servers.context7]',
+      'command = "npx"',
+      'args = ["-y", "@upstash/context7-mcp"]',
+      '',
+    ].join('\n');
+
+    const content = renderCodexGlobalConfig('/home/user/zylos', existing);
+
+    assert.match(content, /model = "gpt-5\.5"/);
+    assert.match(content, /service_tier = "fast"/);
+    assert.match(content, /\[features\]\nmulti_agent = true\ncodex_hooks = true/);
+    assert.match(content, /\[plugins\."gmail@openai-curated"\]\nenabled = true/);
+    assert.match(content, /\[mcp_servers\.context7\]\ncommand = "npx"/);
+    assert.match(content, /\[projects\."\/home\/user\/zylos"\]\ntrust_level = "trusted"/);
+  });
+
   it('preserves unrelated trust entries', () => {
     const existing = [
       '[projects."/tmp/other-project"]',
@@ -70,7 +98,7 @@ describe('renderCodexGlobalConfig', () => {
     assert.match(content, /\[projects\."\/home\/user\/zylos"\]/);
   });
 
-  it('does not include headless settings or features', () => {
+  it('does not synthesize project-level headless settings when absent', () => {
     const content = renderCodexGlobalConfig('/home/user/zylos');
     assert.doesNotMatch(content, /\[features\]/);
     assert.doesNotMatch(content, /\[notice\]/);
@@ -145,6 +173,39 @@ describe('writeCodexConfig', () => {
     assert.doesNotMatch(
       globalContent,
       new RegExp(`\\[projects\\."${escapeRegExp(path.resolve(projectDir))}"\\]\\ntrust_level = "untrusted"`)
+    );
+  });
+
+  it('preserves existing non-project global config while writing trust', () => {
+    const globalConfigPath = path.join(fakeHome, '.codex', 'config.toml');
+    const projectDir = path.join(fakeZylosDir, 'workspace', 'project-c');
+
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      globalConfigPath,
+      [
+        'model = "gpt-5.5"',
+        '',
+        '[features]',
+        'multi_agent = true',
+        'codex_hooks = true',
+        '',
+        '[plugins."gmail@openai-curated"]',
+        'enabled = true',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+
+    assert.equal(writeCodexConfig(projectDir), true);
+
+    const globalContent = fs.readFileSync(globalConfigPath, 'utf8');
+    assert.match(globalContent, /model = "gpt-5\.5"/);
+    assert.match(globalContent, /\[features\]\nmulti_agent = true\ncodex_hooks = true/);
+    assert.match(globalContent, /\[plugins\."gmail@openai-curated"\]\nenabled = true/);
+    assert.match(
+      globalContent,
+      new RegExp(`\\[projects\\."${escapeRegExp(path.resolve(projectDir))}"\\]\\ntrust_level = "trusted"`)
     );
   });
 });

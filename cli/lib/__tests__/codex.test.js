@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const tmpDirs = [];
 
-const { CodexAdapter, buildCodexBootstrapPrompt, isOnboardingPendingState } = await import('../runtime/codex.js');
+const {
+  CodexAdapter,
+  buildCodexBootstrapPrompt,
+  isOnboardingPendingState,
+  readCodexToolEnv,
+} = await import('../runtime/codex.js');
 
 function makeZylosDir(stateContent) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-bootstrap-test-'));
@@ -91,5 +96,35 @@ describe('Codex auth checks', () => {
 
     assert.equal(result.ok, true);
     assert.equal(requestedUrl, 'https://proxy.example.com/v1/models');
+  });
+});
+
+describe('Codex tool environment', () => {
+  it('loads selected tool credentials from zylos .env', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-env-test-'));
+    tmpDirs.push(zylosDir);
+    fs.writeFileSync(
+      path.join(zylosDir, '.env'),
+      [
+        'OMNI_API_KEY=omni_test',
+        'AZURE_OPENAI_ENDPOINT="https://azure.example.com"',
+        'SLACK_BOT_TOKEN=xoxb-not-for-codex',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const env = readCodexToolEnv(zylosDir);
+
+    assert.equal(env.OMNI_API_KEY, 'omni_test');
+    assert.equal(env.AZURE_OPENAI_ENDPOINT, 'https://azure.example.com');
+    assert.equal(env.SLACK_BOT_TOKEN, undefined);
+  });
+
+  it('returns empty env when zylos .env is absent', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-env-test-'));
+    tmpDirs.push(zylosDir);
+
+    assert.deepEqual(readCodexToolEnv(zylosDir), {});
   });
 });
