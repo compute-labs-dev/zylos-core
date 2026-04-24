@@ -31,6 +31,7 @@ const {
   isBypassState,
   isKeystrokeControl,
   parseKeystrokeKey,
+  isSelfTerminatingSlash,
   getHeartbeatPhase,
   shouldAutoAckHeartbeat,
   readJsonFileWithRetry
@@ -431,5 +432,46 @@ describe('parseKeystrokeKey', () => {
   it('handles null/undefined content', () => {
     assert.equal(parseKeystrokeKey(null), '');
     assert.equal(parseKeystrokeKey(undefined), '');
+  });
+});
+
+// ── isSelfTerminatingSlash ──────────────────────────────────────────
+
+describe('isSelfTerminatingSlash', () => {
+  it('returns true for bare /exit', () => {
+    assert.equal(isSelfTerminatingSlash('/exit'), true);
+  });
+
+  it('returns true for /exit followed by the c4-control ack suffix', () => {
+    assert.equal(
+      isSelfTerminatingSlash('/exit ---- ack via: node /path/c4-control.js ack --id 480'),
+      true
+    );
+  });
+
+  it('is case-insensitive on the command name', () => {
+    assert.equal(isSelfTerminatingSlash('/EXIT'), true);
+    assert.equal(isSelfTerminatingSlash('/Exit now'), true);
+  });
+
+  it('returns false for conversational content that merely mentions /exit', () => {
+    assert.equal(isSelfTerminatingSlash('please /exit later'), false);
+    assert.equal(isSelfTerminatingSlash('note: /exit is a slash command'), false);
+  });
+
+  it('returns false for unrelated slash commands', () => {
+    assert.equal(isSelfTerminatingSlash('/clear'), false);
+    assert.equal(isSelfTerminatingSlash('/help'), false);
+    assert.equal(isSelfTerminatingSlash('/compact'), false);
+  });
+
+  it('does not match /exitfoo (requires word boundary)', () => {
+    assert.equal(isSelfTerminatingSlash('/exitfoo'), false);
+  });
+
+  it('returns false for empty / null / undefined content', () => {
+    assert.equal(isSelfTerminatingSlash(''), false);
+    assert.equal(isSelfTerminatingSlash(null), false);
+    assert.equal(isSelfTerminatingSlash(undefined), false);
   });
 });

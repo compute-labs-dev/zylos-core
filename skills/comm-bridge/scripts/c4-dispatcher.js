@@ -437,6 +437,24 @@ export function parseKeystrokeKey(content) {
   return (content || '').slice('[KEYSTROKE]'.length).trim();
 }
 
+/**
+ * Detect slash commands that terminate the Claude Code session and therefore
+ * prevent the agent from running the `ack` suffix before exiting. Without
+ * special handling, such messages stay in `running` state forever and get
+ * re-dispatched to every subsequent freshly-launched session, causing an
+ * exit/restart loop.
+ *
+ * Currently narrow to `/exit` — the only known self-terminating slash command
+ * enqueued via the control queue (restart-claude and upgrade-claude skills).
+ * Add entries here if other self-terminating commands emerge; prefer the
+ * narrow list over broad slash-matching to avoid changing ACK semantics for
+ * non-terminating slash commands (e.g. custom user slash skills that DO run
+ * content after the slash).
+ */
+export function isSelfTerminatingSlash(content) {
+  return /^\/exit\b/i.test(content || '');
+}
+
 function releaseItem(item, reason = null) {
   if (item.type === 'control') {
     requeueControl(item.id, reason);
@@ -648,11 +666,17 @@ async function processNextMessage() {
       markDelivered(item.id);
       log(`Conversation id=${item.id} delivered`);
     } else {
-      if (hasAckSuffix(item.content || '')) {
+      // Self-terminating slash commands (e.g. /exit) kill the Claude Code
+      // process before the ack suffix can be executed. Auto-ack on dispatch
+      // regardless of whether an ack suffix is present, so the message does
+      // not stay in `running` forever and re-fire at every subsequent launch.
+      const selfTerminating = isSelfTerminatingSlash(rawContent);
+      if (hasAckSuffix(item.content || '') && !selfTerminating) {
         log(`Control id=${item.id} submitted, waiting ack`);
       } else {
         ackControl(item.id);
-        log(`Control id=${item.id} submitted (no-ack mode), marked done`);
+        const mode = selfTerminating ? 'self-terminating slash, auto-acked' : 'no-ack mode';
+        log(`Control id=${item.id} submitted (${mode}), marked done`);
       }
     }
 
